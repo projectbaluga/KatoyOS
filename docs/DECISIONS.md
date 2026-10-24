@@ -32,3 +32,7 @@ This document records architectural, technical, and design choices made during t
 ## 7. Branding Asset Generation Pipeline
 - **Decision:** Automate asset generation via `tools/make-assets.py` from `assets/katoyos-brand.png`.
 - **Rationale:** Guarantees consistent image dimensions, aspect ratios, rounded corner masks, and background colors across Plymouth boot splash, desktop wallpaper, and panel/menu icon assets.
+
+## 8. Root Filesystem Inode Density Tuning
+- **Decision:** In `build.sh`, patch pi-gen's `export-image/prerun.sh` to call `mke2fs -q -i 8192 -t ext4` (1 inode per 8 KB instead of default 1 inode per 16 KB).
+- **Rationale:** The full KatoyOS desktop userland contains a high count of small files (fonts, icons, themes, Python modules). Without custom inode ratio tuning (`-i 8192`), `mke2fs -d` exhausts inodes during filesystem creation (`__populate_fs: Could not allocate inode`).

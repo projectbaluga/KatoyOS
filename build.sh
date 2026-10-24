@@ -17,6 +17,9 @@ cp config pi-gen/config
 mkdir -p pi-gen/stage2
 touch pi-gen/stage2/SKIP_IMAGES      # don't also export a stock "Lite" image
 
+# Patch pi-gen mke2fs inode ratio to prevent "Could not allocate inode" when populating rootfs with desktop packages
+sed -i 's/mke2fs -q -t ext4/mke2fs -q -i 8192 -t ext4/g' pi-gen/export-image/prerun.sh
+
 cd pi-gen
 ./build-docker.sh
 mkdir -p ../out && cp -v deploy/* ../out/

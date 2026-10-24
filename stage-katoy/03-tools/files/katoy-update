@@ -1,0 +1,6 @@
+#!/bin/bash
+echo "Updating KatoyOS..."
+sudo apt update && sudo apt full-upgrade -y
+echo
+echo "Done. Restart if the kernel or desktop was updated."
+read -rp "Press Enter to close."

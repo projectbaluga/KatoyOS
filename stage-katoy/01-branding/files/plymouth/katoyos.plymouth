@@ -1,0 +1,8 @@
+[Plymouth Theme]
+Name=KatoyOS
+Description=KatoyOS boot splash
+ModuleName=script
+
+[script]
+ImageDir=/usr/share/plymouth/themes/katoyos
+ScriptFile=/usr/share/plymouth/themes/katoyos/katoyos.script

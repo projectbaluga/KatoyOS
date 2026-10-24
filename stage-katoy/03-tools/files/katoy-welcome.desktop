@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=Welcome to KatoyOS
+Comment=Set up region, keyboard and password
+Exec=katoy-welcome
+Icon=katoyos
+Categories=Settings;

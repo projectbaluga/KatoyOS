@@ -1,0 +1,6 @@
+[Desktop Entry]
+Type=Application
+Name=KatoyOS Welcome
+Exec=katoy-welcome --first-run
+Icon=katoyos
+NoDisplay=true

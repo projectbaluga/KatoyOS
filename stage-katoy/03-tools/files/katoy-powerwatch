@@ -1,0 +1,22 @@
+#!/bin/bash
+# Warn the user about under-voltage and overheating on the Pi 3B.
+f=/sys/devices/platform/soc/soc:firmware/get_throttled
+val() {
+	if [ -r "$f" ]; then cat "$f"
+	elif command -v vcgencmd >/dev/null; then vcgencmd get_throttled | cut -d= -f2
+	else echo 0; fi
+}
+uv_prev=0; hot_prev=0
+while sleep 30; do
+	v=$(( $(val) )) || continue
+	uv=$(( v & 0x1 )); hot=$(( v & 0x8 ))
+	if [ "$uv" -ne 0 ] && [ "$uv_prev" -eq 0 ]; then
+		notify-send -u critical -i dialog-warning "Weak power supply" \
+			"Your Raspberry Pi isn't getting enough power. Use a good 5V 2.5A supply and a short cable."
+	fi
+	if [ "$hot" -ne 0 ] && [ "$hot_prev" -eq 0 ]; then
+		notify-send -u normal -i dialog-warning "Running hot" \
+			"The Pi is slowing down to cool off. A heatsink or better airflow will help."
+	fi
+	uv_prev=$uv; hot_prev=$hot
+done

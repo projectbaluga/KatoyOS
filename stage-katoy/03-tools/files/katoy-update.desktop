@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=KatoyOS Update
+Comment=Install the latest updates
+Exec=qterminal -e /usr/bin/katoy-update
+Icon=system-software-update
+Categories=System;Settings;

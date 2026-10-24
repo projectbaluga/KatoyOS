@@ -1,0 +1,34 @@
+# KatoyOS Architectural and Design Decisions
+
+This document records architectural, technical, and design choices made during the development of **KatoyOS** for Raspberry Pi 3 Model B.
+
+---
+
+## 1. Single Hardware Target: Raspberry Pi 3 Model B Only
+- **Decision:** Target `kernel7.img` (Cortex-A53 32-bit `armhf`) exclusively.
+- **Rationale:** Focusing strictly on Pi 3B eliminates unnecessary multi-architecture packages and kernels, reduces image footprint, and keeps memory usage well under the 400 MB idle target on 1 GB RAM hardware.
+- **Kernel Pruning:** Unused Pi 1/Zero (`linux-image-rpi-v6`) and 64-bit (`linux-image-rpi-v8`) kernels are pruned during build if `apt-get -s purge` confirms no critical system dependencies are affected.
+
+## 2. Desktop Architecture: LXQt + Openbox on X11
+- **Decision:** Use LXQt with Openbox on X11 rather than Wayland/labwc.
+- **Rationale:** LXQt + Openbox offers proven stability, lightweight memory usage, low GPU resource demands on Pi 3B's VC4 graphics, and reliable display management with LightDM.
+
+## 3. First-Boot Zero-Config & Welcome Wizard (`katoy-welcome`)
+- **Decision:** Boot automatically into LXQt with auto-login as `katoy`. Launch `katoy-welcome` on first desktop session.
+- **Rationale:** Eliminates complex headless setup while guiding users to set timezone, Wi-Fi country, keyboard layout, and change default passwords securely via `katoy-helper` and `pkexec`.
+
+## 4. Privilege Isolation (`/usr/lib/katoyos/helper` + Polkit)
+- **Decision:** Implement a minimal, strictly validated bash helper script executed via Polkit (`os.katoy.helper.policy`).
+- **Rationale:** Prevents running the entire Python/Qt GUI as root. The helper accepts specific parameters (timezone, wifi-country, keyboard, password) with strict regex and string validation, operating only on the calling user (`PKEXEC_UID`).
+
+## 5. System Health Watchdog (`katoy-powerwatch`)
+- **Decision:** Poll `/sys/devices/platform/soc/soc:firmware/get_throttled` (fallback `vcgencmd get_throttled`) every 30s.
+- **Rationale:** Detects under-voltage (bit 0x1) and soft thermal limiting (bit 0x8) and triggers desktop notifications via `notify-send` on state transitions, protecting hardware without continuous CPU overhead.
+
+## 6. SD Card Wear Reduction
+- **Decision:** Configure systemd journald to `Storage=volatile` and `RuntimeMaxUse=32M`. Enable `rpi-swap` (zram swap).
+- **Rationale:** Extends microSD card lifespan by keeping system logs in RAM and minimizing swap writes to physical flash memory.
+
+## 7. Branding Asset Generation Pipeline
+- **Decision:** Automate asset generation via `tools/make-assets.py` from `assets/katoyos-brand.png`.
+- **Rationale:** Guarantees consistent image dimensions, aspect ratios, rounded corner masks, and background colors across Plymouth boot splash, desktop wallpaper, and panel/menu icon assets.

@@ -1,6 +1,6 @@
 #!/bin/bash -e
 R="${ROOTFS_DIR}"
-install -d "$R/etc/xdg/lxqt" "$R/etc/xdg/pcmanfm-qt/lxqt" "$R/etc/lightdm/lightdm.conf.d" "$R/etc/gtk-3.0" "$R/etc/fonts/conf.d"
+install -d "$R/etc/xdg/lxqt" "$R/etc/xdg/pcmanfm-qt/lxqt" "$R/etc/lightdm/lightdm.conf.d" "$R/etc/gtk-3.0" "$R/etc/fonts/conf.d" "$R/etc/X11"
 install -m 644 files/lxqt.conf              "$R/etc/xdg/lxqt/lxqt.conf"
 install -m 644 files/session.conf           "$R/etc/xdg/lxqt/session.conf"
 install -m 644 files/panel.conf             "$R/etc/xdg/lxqt/panel.conf"

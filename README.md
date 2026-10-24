@@ -8,11 +8,26 @@
 
 ## Preview
 
+### 🖼️ Brand & System Artwork
 <p align="center">
   <img src="assets/katoyos-brand.png" alt="KatoyOS Brand Artwork" width="800"/>
 </p>
 
 *The KatoyOS brand identity featuring the signature glowing circuit oyster with pearl, emblem of stability, speed, and resilience.*
+
+### 🖥️ Desktop UI & LXQt Integration
+<p align="center">
+  <img src="assets/katoyos-desktop-preview.png" alt="KatoyOS LXQt Desktop Preview" width="850"/>
+</p>
+
+*The KatoyOS desktop interface: Dark LXQt environment on Openbox X11, Inter typography, customized 40px panel, QTerminal showing low idle RAM (~312 MB), and KatoyOS PowerWatch under-voltage notification.*
+
+### 🚀 KatoyOS Welcome Wizard
+<p align="center">
+  <img src="assets/katoyos-welcome-preview.png" alt="KatoyOS Welcome Wizard Setup" width="750"/>
+</p>
+
+*First-boot 5-page setup wizard (`katoy-welcome`): Built in PyQt6 for easy timezone selection, Wi-Fi country code regulation, keyboard layout matching, and user account password management.*
 
 ---
 

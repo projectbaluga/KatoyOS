@@ -5,12 +5,16 @@ cd "$(dirname "$0")"
 PI_GEN_REF="${PI_GEN_REF:-2026-10-06-raspios-trixie-armhf}"
 
 command -v docker >/dev/null || { echo "Docker is required."; exit 1; }
-[ -d pi-gen ] || git clone --depth 1 --branch "$PI_GEN_REF" https://github.com/RPi-Distro/pi-gen.git
+if [ ! -d pi-gen ]; then
+	git clone --depth 1 --branch "$PI_GEN_REF" https://github.com/RPi-Distro/pi-gen.git
+fi
 
 rm -rf pi-gen/stage-katoy
 cp -r stage-katoy pi-gen/stage-katoy
 find pi-gen/stage-katoy -name '*.sh' -exec chmod +x {} +
 cp config pi-gen/config
+
+mkdir -p pi-gen/stage2
 touch pi-gen/stage2/SKIP_IMAGES      # don't also export a stock "Lite" image
 
 cd pi-gen

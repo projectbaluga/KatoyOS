@@ -244,16 +244,24 @@ def create_karaoke_preview():
 
     # Top Header Bar
     # Song Code badge
-    draw.rounded_rectangle([30, 25, 120, 65], fill=(0, 210, 255, 200), radius=6)
-    draw.text((45, 33), "00042", fill=(10, 14, 24), font=get_font(18, bold=True))
+    draw.rounded_rectangle([30, 20, 120, 58], fill=(0, 210, 255, 220), radius=6)
+    draw.text((45, 27), "00042", fill=(10, 14, 24), font=get_font(18, bold=True))
 
     # Song Title & Artist
-    draw.text((140, 31), "Hotel California", fill=(255, 255, 255), font=font_title)
-    draw.text((360, 35), "- Eagles", fill=(208, 213, 224), font=font_sub)
+    draw.text((140, 25), "Anak", fill=(255, 255, 255), font=font_title)
+    draw.text((220, 29), "- Freddie Aguilar", fill=(208, 213, 224), font=font_sub)
+
+    # Key / Pitch badge
+    draw.rounded_rectangle([440, 20, 530, 58], fill=(245, 158, 11, 220), radius=6)
+    draw.text((450, 28), "KEY: +2", fill=(10, 14, 24), font=get_font(15, bold=True))
 
     # Return button (right)
-    draw.rounded_rectangle([840, 25, 970, 65], fill=(43, 50, 69, 200), radius=6)
-    draw.text((855, 35), "🔙 Song List", fill=(255, 255, 255), font=font_small)
+    draw.rounded_rectangle([840, 20, 970, 58], fill=(43, 50, 69, 200), radius=6)
+    draw.text((855, 30), "🔙 Song List", fill=(255, 255, 255), font=font_small)
+
+    # NEXT UP Ticker Banner
+    draw.rounded_rectangle([30, 68, 970, 102], fill=(16, 185, 129, 60), outline=(16, 185, 129), width=1, radius=6)
+    draw.text((45, 76), "NEXT UP: [00108] Push - Eraserheads  |  [00215] Harana - Parokya Ni Edgar", fill=(167, 243, 208), font=get_font(13, bold=True))
 
     # Lyrics Container (Center)
     cy = 220

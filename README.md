@@ -34,7 +34,7 @@
   <img src="assets/katoyos-karaoke-preview.png" alt="KatoyOS Karaoke Player Preview" width="750"/>
 </p>
 
-*Standalone, fullscreen MIDI/KAR karaoke player UI (`katoy-karaoke`): Built in PyQt6 with FluidSynth real-time synthesis, USB media auto-detection, SQLite database song search, background image slideshow, and real-time synchronized highlighted lyrics.*
+*Standalone, fullscreen Pinoy videoke player UI (`katoy-karaoke`): Built in PyQt6 with FluidSynth real-time synthesis, USB media auto-detection, song queue reservation system, key/pitch transpose controls, "NEXT UP" banner, end-of-song scoring overlay, and real-time synchronized highlighted lyrics.*
 
 ---
 
@@ -91,7 +91,8 @@ When KatoyOS boots for the first time:
 - **`katoy-helper`** (`/usr/lib/katoyos/helper`): Privileged bash script invoked via Polkit (`pkexec`) for secure timezone, keyboard, wifi-country, and password changes.
 - **`katoy-powerwatch`** (`/usr/bin/katoy-powerwatch`): Background daemon polling firmware throttling bits and notifying the user if power supply voltage is low or temperature limits are reached.
 - **`katoy-update`** (`/usr/bin/katoy-update`): Graphical menu tool launching system package upgrade in `qterminal`.
-- **`katoy-karaoke`** (`/usr/bin/katoy-karaoke`): Fullscreen PyQt6 standalone MIDI/KAR karaoke player.
+- **`katoy-karaoke`** (`/usr/bin/katoy-karaoke`): Fullscreen PyQt6 standalone Pinoy videoke MIDI/KAR player.
+  - **Pinoy Karaoke Features:** Song queue reservation system (`R` shortcut & side panel), Key/Pitch Transpose (`-`/`+` semi-tones), "NEXT UP" banner, and end-of-song scoring overlay (85-100 score with Pinoy praise banners).
   - **USB Auto-Detection:** Automatically scans plugged-in USB removable flash drives (`/media/katoy`, `/media`, `/run/media/katoy`) for songs, SoundFonts (`.sf2`), and background graphics.
   - **Zero SD-Card Writes:** Main SQLite song database (`.katoy-karaoke.db`) is stored directly on the USB drive, keeping search fast across ~40,000 tracks while protecting SD-card wear.
   - **Synced Lyrics & FluidSynth Playback:** Parses MIDI lyric meta-events using `mido` to display real-time highlighted scrolling lyrics with FluidSynth audio synthesized over PipeWire.

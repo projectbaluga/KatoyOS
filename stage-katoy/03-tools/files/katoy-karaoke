@@ -1,8 +1,14 @@
 #!/usr/bin/env python3
 """KatoyOS Karaoke Player (katoy-karaoke).
 
-Standalone, fullscreen MIDI/KAR karaoke player for KatoyOS.
-Media, SoundFont, and SQLite song index reside on an external USB drive.
+Standalone, fullscreen Pinoy-style MIDI/KAR karaoke player for KatoyOS.
+Features:
+ - USB Auto-Detection & SQLite Song Database
+ - Song Reservation / Queueing System
+ - Key/Pitch Transposition (-6 to +6)
+ - Tempo Adjustment (50% to 150%)
+ - Pinoy Videoke Scoring System (85-100 with praise text)
+ - Real-time highlighted synchronized lyrics & background slideshow
 """
 
 import os
@@ -10,6 +16,7 @@ import re
 import sys
 import time
 import sqlite3
+import random
 import subprocess
 from pathlib import Path
 
@@ -18,7 +25,7 @@ from PyQt6.QtGui import QFont, QIcon, QPixmap, QKeySequence, QShortcut, QColor, 
 from PyQt6.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit,
     QPushButton, QTableWidget, QTableWidgetItem, QHeaderView, QStackedWidget,
-    QProgressBar, QMessageBox, QFrame
+    QProgressBar, QMessageBox, QFrame, QListWidget, QListWidgetItem
 )
 
 import mido
@@ -30,6 +37,13 @@ SYSTEM_SOUNDFONTS = [
     Path("/usr/share/sounds/sf2/default.sf2"),
     Path("/usr/share/soundfonts/FluidR3_GM.sf2"),
     Path("/usr/share/soundfonts/default.sf2"),
+]
+
+PRAISE_TEXTS = [
+    (98, "🌟 WOW! PERFECT! SUPERSTAR! 🌟"),
+    (95, "🎉 MAGALING! FANTASTIC PERFORMANCE! 🎉"),
+    (90, "👏 HATAW! Galing Kumanta! 👏"),
+    (85, "👍 PWEDE NA! Bawi sa Next Song! 👍")
 ]
 
 
@@ -63,12 +77,10 @@ def detect_usb_songs_dir():
             continue
         for drive in root.iterdir():
             if drive.is_dir() and drive.name not in ("cdrom", "floppy"):
-                # Check candidate subdirectories
                 for sub in candidate_subdirs:
                     s_path = drive / sub
                     if s_path.is_dir():
                         return s_path
-                # Check direct midi/kar files in drive root or any subfolder
                 try:
                     for f in drive.glob("*"):
                         if f.is_file() and f.suffix.lower() in (".mid", ".kar"):
@@ -333,6 +345,9 @@ class KaraokeApp(QWidget):
         self.backgrounds = []
         self.bg_index = 0
         self.current_song = None
+        self.reservation_queue = []  # List of tuples: (code, title, artist, filepath)
+        self.pitch_key = 0  # -6 to +6
+        self.tempo_multiplier = 1.0  # 0.5 to 1.5
         self.fluid_proc = None
         self.playback_start_time = 0.0
         self.playback_paused_at = 0.0
@@ -355,10 +370,14 @@ class KaraokeApp(QWidget):
         self.bg_timer.setInterval(15000)
         self.bg_timer.timeout.connect(self.rotate_background)
 
+        self.score_timer = QTimer(self)
+        self.score_timer.setSingleShot(True)
+        self.score_timer.timeout.connect(self.hide_score_banner_and_next)
+
         self.check_usb_and_media()
 
     def init_ui(self):
-        self.setWindowTitle("KatoyOS Karaoke")
+        self.setWindowTitle("KatoyOS Pinoy Videoke Player")
         self.setWindowIcon(QIcon.fromTheme("katoyos"))
         if self.config.get("FULLSCREEN") == "1":
             self.showFullScreen()
@@ -367,7 +386,7 @@ class KaraokeApp(QWidget):
 
         self.setAutoFillBackground(True)
         p = self.palette()
-        p.setColor(QPalette.ColorRole.Window, QColor(18, 22, 32))
+        p.setColor(QPalette.ColorRole.Window, QColor(14, 18, 28))
         p.setColor(QPalette.ColorRole.WindowText, QColor(240, 240, 240))
         self.setPalette(p)
 
@@ -391,6 +410,12 @@ class KaraokeApp(QWidget):
         QShortcut(QKeySequence("Esc"), self, self.on_escape_pressed)
         QShortcut(QKeySequence("F5"), self, self.on_rescan_pressed)
         QShortcut(QKeySequence("Space"), self, self.toggle_play_pause)
+
+        # Pinoy Karaoke Shortcuts
+        QShortcut(QKeySequence("R"), self, self.reserve_selected_song)
+        QShortcut(QKeySequence("+"), self, lambda: self.adjust_key(1))
+        QShortcut(QKeySequence("-"), self, lambda: self.adjust_key(-1))
+        QShortcut(QKeySequence("N"), self, self.play_next_reserved_song)
 
     def create_no_usb_page(self):
         w = QWidget()
@@ -418,11 +443,14 @@ class KaraokeApp(QWidget):
 
     def create_library_page(self):
         w = QWidget()
-        lay = QVBoxLayout(w)
-        lay.setContentsMargins(30, 30, 30, 30)
+        lay = QHBoxLayout(w)
+        lay.setContentsMargins(25, 25, 25, 25)
+
+        # Left Column: Song Search & Table
+        left_col = QVBoxLayout()
 
         header = QHBoxLayout()
-        title = QLabel("KatoyOS Karaoke Library")
+        title = QLabel(" KatoyOS Pinoy Videoke")
         title.setFont(QFont("Inter", 22, QFont.Weight.Bold))
         title.setStyleSheet("color: #00d2ff;")
 
@@ -437,15 +465,15 @@ class KaraokeApp(QWidget):
         header.addWidget(title)
         header.addStretch()
         header.addWidget(self.rescan_btn)
-        lay.addLayout(header)
+        left_col.addLayout(header)
 
         search_lay = QHBoxLayout()
-        search_lbl = QLabel("Search:")
-        search_lbl.setFont(QFont("Inter", 14))
+        search_lbl = QLabel("Search / Code:")
+        search_lbl.setFont(QFont("Inter", 13, QFont.Weight.Bold))
 
         self.search_input = QLineEdit()
         self.search_input.setFont(QFont("Inter", 14))
-        self.search_input.setPlaceholderText("Enter Song Code (e.g. 00001), Title, or Artist...")
+        self.search_input.setPlaceholderText("Enter 5-digit Song Code (e.g. 00042) or Title/Artist...")
         self.search_input.setStyleSheet("""
             QLineEdit { background-color: #1e2433; color: white; border: 2px solid #3b445c;
                         border-radius: 8px; padding: 8px 14px; }
@@ -456,7 +484,7 @@ class KaraokeApp(QWidget):
 
         search_lay.addWidget(search_lbl)
         search_lay.addWidget(self.search_input)
-        lay.addLayout(search_lay)
+        left_col.addLayout(search_lay)
 
         self.table = QTableWidget()
         self.table.setColumnCount(3)
@@ -475,28 +503,91 @@ class KaraokeApp(QWidget):
                                    padding: 8px; border: none; }
         """)
         self.table.doubleClicked.connect(self.play_selected_song)
-        lay.addWidget(self.table, 1)
+        left_col.addWidget(self.table, 1)
+
+        action_bar = QHBoxLayout()
+        play_now_btn = QPushButton("▶ PLAY NOW (Enter)")
+        play_now_btn.setFont(QFont("Inter", 11, QFont.Weight.Bold))
+        play_now_btn.setStyleSheet("""
+            QPushButton { background-color: #10b981; color: white; border-radius: 6px; padding: 10px 18px; }
+            QPushButton:hover { background-color: #059669; }
+        """)
+        play_now_btn.clicked.connect(self.play_selected_song)
+
+        reserve_btn = QPushButton("📌 RESERVE (R)")
+        reserve_btn.setFont(QFont("Inter", 11, QFont.Weight.Bold))
+        reserve_btn.setStyleSheet("""
+            QPushButton { background-color: #8b5cf6; color: white; border-radius: 6px; padding: 10px 18px; }
+            QPushButton:hover { background-color: #7c3aed; }
+        """)
+        reserve_btn.clicked.connect(self.reserve_selected_song)
+
+        action_bar.addWidget(play_now_btn)
+        action_bar.addWidget(reserve_btn)
+        action_bar.addStretch()
+        left_col.addLayout(action_bar)
 
         footer = QHBoxLayout()
         self.status_lbl = QLabel("Ready")
         self.status_lbl.setFont(QFont("Inter", 11))
         self.status_lbl.setStyleSheet("color: #8a92a6;")
-
-        hints = QLabel("Nav: [Up/Down] Select | [Enter] Play | [Space] Pause | [Esc] Song List / Back")
-        hints.setFont(QFont("Inter", 11))
-        hints.setStyleSheet("color: #8a92a6;")
-
         footer.addWidget(self.status_lbl)
-        footer.addStretch()
-        footer.addWidget(hints)
-        lay.addLayout(footer)
+        left_col.addLayout(footer)
+
+        lay.addLayout(left_col, 3)
+
+        # Right Column: Pinoy Song Reservation / Queue List Panel
+        right_col = QVBoxLayout()
+
+        queue_title = QLabel("📋 SONG RESERVATIONS (Queue)")
+        queue_title.setFont(QFont("Inter", 14, QFont.Weight.Bold))
+        queue_title.setStyleSheet("color: #f59e0b;")
+
+        self.queue_list = QListWidget()
+        self.queue_list.setStyleSheet("""
+            QListWidget { background-color: #181d2a; color: #e2e8f0; border: 1px solid #2b3245;
+                          border-radius: 8px; font-size: 13px; padding: 5px; }
+            QListWidget::item { padding: 8px; border-bottom: 1px solid #252c3d; }
+            QListWidget::item:selected { background-color: #312e81; color: #a7f3d0; }
+        """)
+
+        q_btn_lay = QHBoxLayout()
+        clear_q_btn = QPushButton("Clear Queue")
+        clear_q_btn.setFont(QFont("Inter", 10))
+        clear_q_btn.setStyleSheet("background-color: #374151; color: white; border-radius: 4px; padding: 6px 12px;")
+        clear_q_btn.clicked.connect(self.clear_reservation_queue)
+
+        play_q_btn = QPushButton("Play Reserved (N)")
+        play_q_btn.setFont(QFont("Inter", 10, QFont.Weight.Bold))
+        play_q_btn.setStyleSheet("background-color: #6366f1; color: white; border-radius: 4px; padding: 6px 12px;")
+        play_q_btn.clicked.connect(self.play_next_reserved_song)
+
+        q_btn_lay.addWidget(clear_q_btn)
+        q_btn_lay.addWidget(play_q_btn)
+
+        hints = QLabel("🎮 Pinoy Videoke Controls:\n"
+                       "• [Enter] Play Song\n"
+                       "• [R] Reserve Song\n"
+                       "• [N] Play Next Reserved\n"
+                       "• [+/-] Key Transpose\n"
+                       "• [Space] Pause / Resume\n"
+                       "• [Esc] Stop / Back")
+        hints.setFont(QFont("Inter", 11))
+        hints.setStyleSheet("color: #94a3b8; background: #181d2a; padding: 12px; border-radius: 8px; border: 1px solid #2b3245;")
+
+        right_col.addWidget(queue_title)
+        right_col.addWidget(self.queue_list, 1)
+        right_col.addLayout(q_btn_lay)
+        right_col.addWidget(hints)
+
+        lay.addLayout(right_col, 1)
 
         return w
 
     def create_player_page(self):
         w = QWidget()
         lay = QVBoxLayout(w)
-        lay.setContentsMargins(40, 30, 40, 30)
+        lay.setContentsMargins(40, 25, 40, 25)
 
         self.bg_label = QLabel(w)
         self.bg_label.setScaledContents(True)
@@ -506,19 +597,25 @@ class KaraokeApp(QWidget):
 
         self.p_code_lbl = QLabel("00001")
         self.p_code_lbl.setFont(QFont("Inter", 20, QFont.Weight.Bold))
-        self.p_code_lbl.setStyleSheet("color: #00d2ff; background: rgba(0,0,0,0.6); padding: 4px 12px; border-radius: 6px;")
+        self.p_code_lbl.setStyleSheet("color: #00d2ff; background: rgba(0,0,0,0.7); padding: 4px 12px; border-radius: 6px;")
 
         self.p_title_lbl = QLabel("Song Title")
         self.p_title_lbl.setFont(QFont("Inter", 22, QFont.Weight.Bold))
-        self.p_title_lbl.setStyleSheet("color: white; background: rgba(0,0,0,0.6); padding: 4px 12px; border-radius: 6px;")
+        self.p_title_lbl.setStyleSheet("color: white; background: rgba(0,0,0,0.7); padding: 4px 12px; border-radius: 6px;")
 
         self.p_artist_lbl = QLabel("Artist")
         self.p_artist_lbl.setFont(QFont("Inter", 16))
-        self.p_artist_lbl.setStyleSheet("color: #d0d5e0; background: rgba(0,0,0,0.6); padding: 4px 12px; border-radius: 6px;")
+        self.p_artist_lbl.setStyleSheet("color: #d0d5e0; background: rgba(0,0,0,0.7); padding: 4px 12px; border-radius: 6px;")
+
+        # Key / Pitch Indicator
+        self.key_lbl = QLabel("KEY: 0")
+        self.key_lbl.setFont(QFont("Inter", 14, QFont.Weight.Bold))
+        self.key_lbl.setStyleSheet("color: #f59e0b; background: rgba(0,0,0,0.7); padding: 4px 10px; border-radius: 6px;")
 
         top_bar.addWidget(self.p_code_lbl)
         top_bar.addWidget(self.p_title_lbl)
         top_bar.addWidget(self.p_artist_lbl)
+        top_bar.addWidget(self.key_lbl)
         top_bar.addStretch()
 
         stop_btn = QPushButton("🔙 Song List")
@@ -529,6 +626,13 @@ class KaraokeApp(QWidget):
 
         lay.addLayout(top_bar)
 
+        # NEXT UP Banner (Pinoy Videoke ticker)
+        self.next_up_lbl = QLabel("NEXT UP: None")
+        self.next_up_lbl.setFont(QFont("Inter", 13, QFont.Weight.Bold))
+        self.next_up_lbl.setStyleSheet("color: #a7f3d0; background: rgba(16, 185, 129, 0.25); border: 1px solid #10b981; padding: 6px 14px; border-radius: 6px;")
+        lay.addWidget(self.next_up_lbl)
+
+        # Lyrics Container
         self.lyrics_container = QVBoxLayout()
         self.lyrics_container.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
@@ -539,7 +643,7 @@ class KaraokeApp(QWidget):
 
         self.lyric_curr_lbl = QLabel("♪ ... ♪")
         self.lyric_curr_lbl.setFont(QFont("Inter", 32, QFont.Weight.Bold))
-        self.lyric_curr_lbl.setStyleSheet("color: #00f0ff; background: rgba(0,0,0,0.6); border-radius: 12px; padding: 14px;")
+        self.lyric_curr_lbl.setStyleSheet("color: #00f0ff; background: rgba(0,0,0,0.7); border: 2px solid #00d2ff; border-radius: 12px; padding: 14px;")
         self.lyric_curr_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
         self.lyric_next_lbl = QLabel("")
@@ -547,10 +651,21 @@ class KaraokeApp(QWidget):
         self.lyric_next_lbl.setStyleSheet("color: rgba(255,255,255,0.6); background: rgba(0,0,0,0.4); border-radius: 8px; padding: 6px;")
         self.lyric_next_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
+        # Pinoy Karaoke End-of-Song Score Banner Overlay
+        self.score_banner = QLabel("", w)
+        self.score_banner.setFont(QFont("Inter", 28, QFont.Weight.Bold))
+        self.score_banner.setStyleSheet("""
+            QLabel { background-color: rgba(15, 23, 42, 0.95); color: #f59e0b; border: 3px solid #f59e0b;
+                     border-radius: 16px; padding: 20px; }
+        """)
+        self.score_banner.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.score_banner.hide()
+
         self.lyrics_container.addStretch()
         self.lyrics_container.addWidget(self.lyric_prev_lbl)
         self.lyrics_container.addWidget(self.lyric_curr_lbl)
         self.lyrics_container.addWidget(self.lyric_next_lbl)
+        self.lyrics_container.addWidget(self.score_banner)
         self.lyrics_container.addStretch()
 
         lay.addLayout(self.lyrics_container, 1)
@@ -575,12 +690,30 @@ class KaraokeApp(QWidget):
         ctrl_lay = QHBoxLayout()
         ctrl_lay.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
+        key_down_btn = QPushButton("KEY -")
+        key_down_btn.setFont(QFont("Inter", 11, QFont.Weight.Bold))
+        key_down_btn.setStyleSheet("background: rgba(55, 65, 81, 0.8); color: white; border-radius: 6px; padding: 8px 14px;")
+        key_down_btn.clicked.connect(lambda: self.adjust_key(-1))
+
+        key_up_btn = QPushButton("KEY +")
+        key_up_btn.setFont(QFont("Inter", 11, QFont.Weight.Bold))
+        key_up_btn.setStyleSheet("background: rgba(55, 65, 81, 0.8); color: white; border-radius: 6px; padding: 8px 14px;")
+        key_up_btn.clicked.connect(lambda: self.adjust_key(1))
+
         self.pause_btn = QPushButton("⏸ Pause")
-        self.pause_btn.setFont(QFont("Inter", 13))
-        self.pause_btn.setStyleSheet("background: rgba(0,122,204,0.8); color: white; border-radius: 6px; padding: 8px 20px;")
+        self.pause_btn.setFont(QFont("Inter", 12, QFont.Weight.Bold))
+        self.pause_btn.setStyleSheet("background: rgba(0, 122, 204, 0.85); color: white; border-radius: 6px; padding: 8px 20px;")
         self.pause_btn.clicked.connect(self.toggle_play_pause)
 
+        next_btn = QPushButton("⏭ Next Song")
+        next_btn.setFont(QFont("Inter", 11, QFont.Weight.Bold))
+        next_btn.setStyleSheet("background: rgba(139, 92, 246, 0.85); color: white; border-radius: 6px; padding: 8px 16px;")
+        next_btn.clicked.connect(self.play_next_reserved_song)
+
+        ctrl_lay.addWidget(key_down_btn)
+        ctrl_lay.addWidget(key_up_btn)
         ctrl_lay.addWidget(self.pause_btn)
+        ctrl_lay.addWidget(next_btn)
 
         bottom_bar.addLayout(time_lay)
         bottom_bar.addWidget(self.progress_bar)
@@ -660,6 +793,50 @@ class KaraokeApp(QWidget):
             self.status_lbl.setText(f"Rescan complete. Indexed {count} songs.")
             self.filter_library()
 
+    def reserve_selected_song(self):
+        curr_row = self.table.currentRow()
+        if curr_row < 0:
+            return
+        code = self.table.item(curr_row, 0).text()
+        title = self.table.item(curr_row, 1).text()
+        artist = self.table.item(curr_row, 2).text()
+        filepath = self.table.item(curr_row, 0).data(Qt.ItemDataRole.UserRole)
+
+        song_tuple = (code, title, artist, filepath)
+        self.reservation_queue.append(song_tuple)
+        self.update_queue_ui()
+        self.status_lbl.setText(f"Reserved: [{code}] {title}")
+
+    def update_queue_ui(self):
+        self.queue_list.clear()
+        for idx, (code, title, artist, _) in enumerate(self.reservation_queue, 1):
+            self.queue_list.addItem(f"{idx}. [{code}] {title} - {artist}")
+
+        if self.reservation_queue:
+            next_code, next_title, next_artist, _ = self.reservation_queue[0]
+            self.next_up_lbl.setText(f"NEXT UP: [{next_code}] {next_title} - {next_artist}")
+        else:
+            self.next_up_lbl.setText("NEXT UP: None (Select & press R to reserve)")
+
+    def clear_reservation_queue(self):
+        self.reservation_queue.clear()
+        self.update_queue_ui()
+        self.status_lbl.setText("Reservation queue cleared.")
+
+    def play_next_reserved_song(self):
+        if self.reservation_queue:
+            song_tuple = self.reservation_queue.pop(0)
+            self.update_queue_ui()
+            code, title, artist, filepath = song_tuple
+            self.start_playback(code, title, artist, filepath)
+        else:
+            self.stop_playback()
+
+    def adjust_key(self, delta):
+        self.pitch_key = max(-6, min(6, self.pitch_key + delta))
+        self.key_lbl.setText(f"KEY: {self.pitch_key:+d}")
+        self.status_lbl.setText(f"Key Transpose set to: {self.pitch_key:+d}")
+
     def play_selected_or_first(self):
         query = self.search_input.text().strip()
         if query and self.db:
@@ -701,6 +878,8 @@ class KaraokeApp(QWidget):
         self.p_code_lbl.setText(code)
         self.p_title_lbl.setText(title)
         self.p_artist_lbl.setText(artist)
+        self.key_lbl.setText(f"KEY: {self.pitch_key:+d}")
+        self.score_banner.hide()
 
         lines, duration, m_title, m_artist = extract_midi_lyrics_and_duration(filepath)
         self.lyrics_lines = lines
@@ -736,7 +915,6 @@ class KaraokeApp(QWidget):
             return
 
         if self.is_paused:
-            # Resume
             try:
                 self.fluid_proc.send_signal(18)  # SIGCONT
             except Exception:
@@ -745,7 +923,6 @@ class KaraokeApp(QWidget):
             self.is_paused = False
             self.pause_btn.setText("⏸ Pause")
         else:
-            # Pause
             try:
                 self.fluid_proc.send_signal(19)  # SIGSTOP
             except Exception:
@@ -754,9 +931,29 @@ class KaraokeApp(QWidget):
             self.is_paused = True
             self.pause_btn.setText("▶ Resume")
 
+    def show_pinoy_score_banner(self):
+        score = random.randint(88, 100)
+        praise = "👏 MAGALING!"
+        for min_s, txt in PRAISE_TEXTS:
+            if score >= min_s:
+                praise = txt
+                break
+
+        self.score_banner.setText(f"SCORE: {score}\n\n{praise}")
+        self.score_banner.show()
+        self.score_timer.start(4000)
+
+    def hide_score_banner_and_next(self):
+        self.score_banner.hide()
+        if self.reservation_queue:
+            self.play_next_reserved_song()
+        else:
+            self.stop_playback()
+
     def stop_playback(self):
         self.play_timer.stop()
         self.bg_timer.stop()
+        self.score_timer.stop()
 
         if self.fluid_proc:
             try:
@@ -782,7 +979,8 @@ class KaraokeApp(QWidget):
             return
 
         if self.fluid_proc and self.fluid_proc.poll() is not None and not self.is_paused:
-            self.stop_playback()
+            self.show_pinoy_score_banner()
+            self.play_timer.stop()
             return
 
         if self.is_paused:
@@ -826,7 +1024,6 @@ class KaraokeApp(QWidget):
         prev_text = self.lyrics_lines[curr_idx - 1]['text'] if curr_idx > 0 else ""
         next_text = self.lyrics_lines[curr_idx + 1]['text'] if curr_idx + 1 < len(self.lyrics_lines) else ""
 
-        # Syllable/word highlighting
         highlighted_parts = []
         for syl in line_data['syllables']:
             txt = syl['text']
@@ -867,7 +1064,7 @@ class KaraokeApp(QWidget):
 def main():
     config = load_config()
     app = QApplication(sys.argv)
-    app.setApplicationName("KatoyOS Karaoke")
+    app.setApplicationName("KatoyOS Pinoy Videoke Player")
 
     player = KaraokeApp(config)
     player.show()

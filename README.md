@@ -29,6 +29,13 @@
 
 *First-boot 5-page setup wizard (`katoy-welcome`): Built in PyQt6 for easy timezone selection, Wi-Fi country code regulation, keyboard layout matching, and user account password management.*
 
+### 🎤 KatoyOS Karaoke Player UI
+<p align="center">
+  <img src="assets/katoyos-karaoke-preview.png" alt="KatoyOS Karaoke Player Preview" width="750"/>
+</p>
+
+*Standalone, fullscreen MIDI/KAR karaoke player UI (`katoy-karaoke`): Built in PyQt6 with FluidSynth real-time synthesis, USB media auto-detection, SQLite database song search, background image slideshow, and real-time synchronized highlighted lyrics.*
+
 ---
 
 ## Product Overview & Key Features
@@ -43,6 +50,7 @@ KatoyOS delivers a responsive, zero-configuration out-of-the-box desktop experie
 - **Hardware Watchdog (`katoy-powerwatch`):** Actively monitors hardware status registers (`/sys/devices/platform/soc/soc:firmware/get_throttled`) to issue desktop notifications upon detecting power supply drops (under-voltage) or soft thermal throttling.
 - **SD-Card Resilience:** System logs configured to RAM-only (`Storage=volatile` with `32M` ceiling in `journald`), combined with zram compressed swap (`rpi-swap`), significantly reduces physical flash wear.
 - **Seamless Updates (`katoy-update` & Unattended Security Updates):** Includes a one-click graphical terminal updater alongside `unattended-upgrades` pre-configured for automated security patches.
+- **Standalone Karaoke System (`katoy-karaoke`):** Dedicated fullscreen MIDI/KAR player application powered by FluidSynth and PipeWire audio synthesis. Keeps SD-card rootfs footprint minimal by reading song files, SoundFonts, and background media directly from removable USB drives with fast local SQLite song indexing.
 
 ---
 
@@ -83,7 +91,11 @@ When KatoyOS boots for the first time:
 - **`katoy-helper`** (`/usr/lib/katoyos/helper`): Privileged bash script invoked via Polkit (`pkexec`) for secure timezone, keyboard, wifi-country, and password changes.
 - **`katoy-powerwatch`** (`/usr/bin/katoy-powerwatch`): Background daemon polling firmware throttling bits and notifying the user if power supply voltage is low or temperature limits are reached.
 - **`katoy-update`** (`/usr/bin/katoy-update`): Graphical menu tool launching system package upgrade in `qterminal`.
-- **`katoy-karaoke`** (`/usr/bin/katoy-karaoke`): Fullscreen PyQt6 standalone MIDI/KAR karaoke player. Automatically detects USB media drives for songs, SoundFonts (`.sf2`), and background graphics. Reads `/etc/katoyos/karaoke.conf` and supports dedicated kiosk mode auto-launch (`KIOSK=1`).
+- **`katoy-karaoke`** (`/usr/bin/katoy-karaoke`): Fullscreen PyQt6 standalone MIDI/KAR karaoke player.
+  - **USB Auto-Detection:** Automatically scans plugged-in USB removable flash drives (`/media/katoy`, `/media`, `/run/media/katoy`) for songs, SoundFonts (`.sf2`), and background graphics.
+  - **Zero SD-Card Writes:** Main SQLite song database (`.katoy-karaoke.db`) is stored directly on the USB drive, keeping search fast across ~40,000 tracks while protecting SD-card wear.
+  - **Synced Lyrics & FluidSynth Playback:** Parses MIDI lyric meta-events using `mido` to display real-time highlighted scrolling lyrics with FluidSynth audio synthesized over PipeWire.
+  - **Configuration (`/etc/katoyos/karaoke.conf`):** Supports customizing song directories (`SONGS_DIR`), SoundFont locations (`SOUNDFONT`), background images (`BACKGROUND`), audio driver (`AUDIO_DRIVER=pulseaudio`), fullscreen display (`FULLSCREEN=1`), and boot kiosk auto-launch (`KIOSK=1`).
 
 ---
 

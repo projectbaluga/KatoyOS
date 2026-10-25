@@ -222,10 +222,75 @@ def create_welcome_preview():
     bg.save(ASSETS_DIR / "katoyos-welcome-preview.png", "PNG")
     print("Generated katoyos-welcome-preview.png")
 
+def create_karaoke_preview():
+    # Base canvas (1000x650)
+    wp_path = BRANDING_DIR / "wallpaper.png"
+    if wp_path.exists():
+        bg = Image.open(wp_path).convert("RGBA").resize((1000, 650), Image.Resampling.LANCZOS)
+    else:
+        bg = Image.new("RGBA", (1000, 650), (18, 22, 32, 255))
+
+    # Dark overlay to simulate player background
+    overlay = Image.new("RGBA", (1000, 650), (10, 14, 24, 180))
+    bg = Image.alpha_composite(bg, overlay)
+
+    draw = ImageDraw.Draw(bg)
+
+    font_title = get_font(22, bold=True)
+    font_sub = get_font(16)
+    font_lyric_cur = get_font(28, bold=True)
+    font_lyric_other = get_font(18)
+    font_small = get_font(12)
+
+    # Top Header Bar
+    # Song Code badge
+    draw.rounded_rectangle([30, 25, 120, 65], fill=(0, 210, 255, 200), radius=6)
+    draw.text((45, 33), "00042", fill=(10, 14, 24), font=get_font(18, bold=True))
+
+    # Song Title & Artist
+    draw.text((140, 31), "Hotel California", fill=(255, 255, 255), font=font_title)
+    draw.text((360, 35), "- Eagles", fill=(208, 213, 224), font=font_sub)
+
+    # Return button (right)
+    draw.rounded_rectangle([840, 25, 970, 65], fill=(43, 50, 69, 200), radius=6)
+    draw.text((855, 35), "🔙 Song List", fill=(255, 255, 255), font=font_small)
+
+    # Lyrics Container (Center)
+    cy = 220
+    # Previous line
+    draw.rounded_rectangle([150, cy - 60, 850, cy - 10], fill=(0, 0, 0, 100), radius=8)
+    draw.text((500, cy - 43), "Welcome to the Hotel California", fill=(255, 255, 255, 120), font=font_lyric_other, anchor="mm")
+
+    # Current line (highlighted)
+    draw.rounded_rectangle([100, cy + 10, 900, cy + 90], fill=(0, 0, 0, 160), outline=(0, 210, 255), width=2, radius=12)
+    # Highlighted word "lovely" and normal text
+    draw.text((500, cy + 50), "Such a lovely place, such a lovely face", fill=(0, 240, 255), font=font_lyric_cur, anchor="mm")
+
+    # Next line
+    draw.rounded_rectangle([150, cy + 110, 850, cy + 160], fill=(0, 0, 0, 100), radius=8)
+    draw.text((500, cy + 127), "Plenty of room at the Hotel California", fill=(255, 255, 255, 180), font=font_lyric_other, anchor="mm")
+
+    # Bottom Progress & Controls Bar
+    by = 560
+    # Time
+    draw.text((900, by), "01:45 / 06:30", fill=(255, 255, 255), font=font_small)
+
+    # Progress bar
+    draw.rounded_rectangle([30, by + 20, 970, by + 28], fill=(255, 255, 255, 50), radius=4)
+    draw.rounded_rectangle([30, by + 20, 290, by + 28], fill=(0, 210, 255), radius=4)
+
+    # Controls button
+    draw.rounded_rectangle([440, by + 38, 560, by + 72], fill=(0, 122, 204, 200), radius=6)
+    draw.text((500, by + 47), "⏸ Pause", fill=(255, 255, 255), font=font_small, anchor="mm")
+
+    bg.save(ASSETS_DIR / "katoyos-karaoke-preview.png", "PNG")
+    print("Generated katoyos-karaoke-preview.png")
+
 def main():
     ASSETS_DIR.mkdir(parents=True, exist_ok=True)
     create_desktop_preview()
     create_welcome_preview()
+    create_karaoke_preview()
 
 if __name__ == "__main__":
     main()

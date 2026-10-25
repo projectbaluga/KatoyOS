@@ -126,7 +126,11 @@ fi
 
 # 5. Assert installed tools and files exist with correct modes
 [ -x "$WORK_DIR/usr/bin/katoy-welcome" ] || { echo "FAIL: katoy-welcome missing or not executable"; exit 1; }
+[ -x "$WORK_DIR/usr/bin/katoy-karaoke" ] || { echo "FAIL: katoy-karaoke missing or not executable"; exit 1; }
 [ -x "$WORK_DIR/usr/lib/katoyos/helper" ] || { echo "FAIL: katoy-helper missing or not executable"; exit 1; }
+[ -f "$WORK_DIR/etc/katoyos/karaoke.conf" ] || { echo "FAIL: karaoke.conf missing"; exit 1; }
+[ -f "$WORK_DIR/usr/share/applications/katoy-karaoke.desktop" ] || { echo "FAIL: katoy-karaoke.desktop missing"; exit 1; }
+[ -f "$WORK_DIR/etc/xdg/autostart/katoy-karaoke.desktop" ] || { echo "FAIL: katoy-karaoke-autostart.desktop missing"; exit 1; }
 [ -f "$WORK_DIR/usr/share/backgrounds/katoyos/default.png" ] || { echo "FAIL: wallpaper missing"; exit 1; }
 
 echo "=== All test harness assertions PASSED successfully! ==="

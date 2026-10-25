@@ -1,0 +1,6 @@
+[Desktop Entry]
+Type=Application
+Name=KatoyOS Karaoke Autostart
+Exec=sh -c 'if [ "$(grep -E "^KIOSK=1" /etc/katoyos/karaoke.conf 2>/dev/null)" ]; then exec katoy-karaoke; fi'
+Icon=katoyos
+NoDisplay=true

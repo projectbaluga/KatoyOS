@@ -36,3 +36,9 @@ This document records architectural, technical, and design choices made during t
 ## 8. Root Filesystem Inode Density Tuning
 - **Decision:** In `build.sh`, patch pi-gen's `export-image/prerun.sh` to call `mke2fs -q -i 8192 -t ext4` (1 inode per 8 KB instead of default 1 inode per 16 KB).
 - **Rationale:** The full KatoyOS desktop userland contains a high count of small files (fonts, icons, themes, Python modules). Without custom inode ratio tuning (`-i 8192`), `mke2fs -d` exhausts inodes during filesystem creation (`__populate_fs: Could not allocate inode`).
+
+## 9. Fullscreen MIDI/KAR Karaoke Player (`katoy-karaoke`) Architecture
+- **Decision:** Implement `katoy-karaoke` as a lightweight standalone PyQt6 application. Keep rootfs minimal by installing only the player binary, config file, `fluidsynth`, and `python3-mido`. All song files (MIDI/`.kar`), SoundFonts (`.sf2`), background images, and the SQLite index reside on the external USB flash drive.
+- **Rationale:** Eliminates SD-card write wear, minimizes image size (omitting ~140 MB SoundFont packages from rootfs), and optimizes performance on 1 GB RAM Raspberry Pi 3 Model B hardware.
+- **SQLite Indexing:** Stores `.katoy-karaoke.db` directly on the USB drive so the index travels with the media. Only updates when file count/mtime changes or on manual rescan (F5), ensuring instant boot search performance across ~40,000 files.
+- **Audio Output Driver:** Configured to `pulseaudio` by default in `/etc/katoyos/karaoke.conf`, which connects seamlessly to WirePlumber / PipeWire via the `pipewire-pulse` compatibility layer on KatoyOS.

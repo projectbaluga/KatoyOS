@@ -83,6 +83,7 @@ When KatoyOS boots for the first time:
 - **`katoy-helper`** (`/usr/lib/katoyos/helper`): Privileged bash script invoked via Polkit (`pkexec`) for secure timezone, keyboard, wifi-country, and password changes.
 - **`katoy-powerwatch`** (`/usr/bin/katoy-powerwatch`): Background daemon polling firmware throttling bits and notifying the user if power supply voltage is low or temperature limits are reached.
 - **`katoy-update`** (`/usr/bin/katoy-update`): Graphical menu tool launching system package upgrade in `qterminal`.
+- **`katoy-karaoke`** (`/usr/bin/katoy-karaoke`): Fullscreen PyQt6 standalone MIDI/KAR karaoke player. Automatically detects USB media drives for songs, SoundFonts (`.sf2`), and background graphics. Reads `/etc/katoyos/karaoke.conf` and supports dedicated kiosk mode auto-launch (`KIOSK=1`).
 
 ---
 

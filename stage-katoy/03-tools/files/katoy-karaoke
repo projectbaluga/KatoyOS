@@ -1,0 +1,879 @@
+#!/usr/bin/env python3
+"""KatoyOS Karaoke Player (katoy-karaoke).
+
+Standalone, fullscreen MIDI/KAR karaoke player for KatoyOS.
+Media, SoundFont, and SQLite song index reside on an external USB drive.
+"""
+
+import os
+import re
+import sys
+import time
+import sqlite3
+import subprocess
+from pathlib import Path
+
+from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QObject
+from PyQt6.QtGui import QFont, QIcon, QPixmap, QKeySequence, QShortcut, QColor, QPalette
+from PyQt6.QtWidgets import (
+    QApplication, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit,
+    QPushButton, QTableWidget, QTableWidgetItem, QHeaderView, QStackedWidget,
+    QProgressBar, QMessageBox, QFrame
+)
+
+import mido
+
+CONFIG_FILE = Path("/etc/katoyos/karaoke.conf")
+DEFAULT_WALLPAPER = Path("/usr/share/backgrounds/katoyos/default.png")
+SYSTEM_SOUNDFONTS = [
+    Path("/usr/share/sounds/sf2/FluidR3_GM.sf2"),
+    Path("/usr/share/sounds/sf2/default.sf2"),
+    Path("/usr/share/soundfonts/FluidR3_GM.sf2"),
+    Path("/usr/share/soundfonts/default.sf2"),
+]
+
+
+def load_config():
+    cfg = {
+        "SONGS_DIR": "auto",
+        "SOUNDFONT": "",
+        "BACKGROUND": "",
+        "AUDIO_DRIVER": "pulseaudio",
+        "FULLSCREEN": "1",
+        "KIOSK": "0",
+    }
+    if CONFIG_FILE.exists():
+        try:
+            for line in CONFIG_FILE.read_text(encoding="utf-8").splitlines():
+                line = line.strip()
+                if line and not line.startswith("#") and "=" in line:
+                    k, v = line.split("=", 1)
+                    cfg[k.strip()] = v.strip()
+        except Exception as e:
+            print(f"Error reading {CONFIG_FILE}: {e}")
+    return cfg
+
+
+def detect_usb_songs_dir():
+    mount_roots = [Path("/media/katoy"), Path("/media"), Path("/run/media/katoy"), Path("/mnt")]
+    candidate_subdirs = ["songs", "karaoke", "midi", "kar", "SONGS", "KARAOKE", "MIDI", "KAR"]
+
+    for root in mount_roots:
+        if not root.exists():
+            continue
+        for drive in root.iterdir():
+            if drive.is_dir() and drive.name not in ("cdrom", "floppy"):
+                # Check candidate subdirectories
+                for sub in candidate_subdirs:
+                    s_path = drive / sub
+                    if s_path.is_dir():
+                        return s_path
+                # Check direct midi/kar files in drive root or any subfolder
+                try:
+                    for f in drive.glob("*"):
+                        if f.is_file() and f.suffix.lower() in (".mid", ".kar"):
+                            return drive
+                        elif f.is_dir() and not f.name.startswith("."):
+                            for sf in f.glob("*"):
+                                if sf.is_file() and sf.suffix.lower() in (".mid", ".kar"):
+                                    return drive
+                except Exception:
+                    pass
+    return None
+
+
+def find_soundfont(configured_path, usb_dir):
+    if configured_path and Path(configured_path).exists():
+        return Path(configured_path)
+
+    if usb_dir and usb_dir.exists():
+        usb_root = usb_dir.parent if usb_dir.name in ("songs", "karaoke", "midi", "kar", "SONGS", "KARAOKE", "MIDI", "KAR") else usb_dir
+        try:
+            sf_files = list(usb_root.rglob("*.sf2"))
+            if sf_files:
+                return sf_files[0]
+        except Exception:
+            pass
+
+    for sys_sf in SYSTEM_SOUNDFONTS:
+        if sys_sf.exists():
+            return sys_sf
+
+    return None
+
+
+def find_backgrounds(configured_path, usb_dir):
+    bg_list = []
+    if configured_path:
+        p = Path(configured_path)
+        if p.is_file() and p.suffix.lower() in (".png", ".jpg", ".jpeg"):
+            return [p]
+        elif p.is_dir():
+            bg_list = [f for f in p.iterdir() if f.suffix.lower() in (".png", ".jpg", ".jpeg")]
+            if bg_list:
+                return sorted(bg_list)
+
+    if usb_dir and usb_dir.exists():
+        usb_root = usb_dir.parent if usb_dir.name in ("songs", "karaoke", "midi", "kar", "SONGS", "KARAOKE", "MIDI", "KAR") else usb_dir
+        for cand in [usb_root / "backgrounds", usb_root / "images", usb_root / "wallpapers"]:
+            if cand.is_dir():
+                imgs = [f for f in cand.iterdir() if f.suffix.lower() in (".png", ".jpg", ".jpeg")]
+                if imgs:
+                    return sorted(imgs)
+
+    if DEFAULT_WALLPAPER.exists():
+        return [DEFAULT_WALLPAPER]
+    return []
+
+
+def parse_filename_metadata(filepath, code_num):
+    stem = filepath.stem
+    code_str = f"{code_num:05d}"
+    title = stem
+    artist = "Unknown Artist"
+
+    m = re.match(r"^(\d+)\s*[-_]\s*(.+)$", stem)
+    if m:
+        c_code, rest = m.group(1), m.group(2)
+        code_str = c_code.zfill(5)
+        if " - " in rest:
+            parts = rest.split(" - ", 1)
+            artist, title = parts[0].strip(), parts[1].strip()
+        else:
+            title = rest.strip()
+    elif " - " in stem:
+        parts = stem.split(" - ", 1)
+        artist, title = parts[0].strip(), parts[1].strip()
+
+    return code_str, title, artist
+
+
+def extract_midi_lyrics_and_duration(filepath):
+    try:
+        mid = mido.MidiFile(filepath)
+    except Exception as e:
+        return [], 0.0, Path(filepath).stem, ""
+
+    ticks_per_beat = mid.ticks_per_beat or 480
+
+    tempo_changes = []
+    max_ticks = 0
+    for track in mid.tracks:
+        abs_tick = 0
+        for msg in track:
+            abs_tick += msg.time
+            if msg.type == 'set_tempo':
+                tempo_changes.append((abs_tick, msg.tempo))
+        if abs_tick > max_ticks:
+            max_ticks = abs_tick
+
+    tempo_changes.sort(key=lambda x: x[0])
+    if not tempo_changes or tempo_changes[0][0] > 0:
+        tempo_changes.insert(0, (0, 500000))
+
+    def tick_to_sec(target_tick):
+        sec = 0.0
+        last_tick = 0
+        last_tempo = 500000
+        for t_tick, t_tempo in tempo_changes:
+            if t_tick >= target_tick:
+                break
+            sec += ((t_tick - last_tick) * last_tempo) / (ticks_per_beat * 1000000.0)
+            last_tick = t_tick
+            last_tempo = t_tempo
+        sec += ((target_tick - last_tick) * last_tempo) / (ticks_per_beat * 1000000.0)
+        return sec
+
+    total_duration = tick_to_sec(max_ticks)
+
+    raw_syllables = []
+    meta_title = ""
+    meta_artist = ""
+
+    for track in mid.tracks:
+        abs_tick = 0
+        for msg in track:
+            abs_tick += msg.time
+            if msg.type in ('lyrics', 'text'):
+                txt = msg.text
+                if not txt:
+                    continue
+                if txt.startswith('@T'):
+                    t_val = txt[2:].strip()
+                    if not meta_title:
+                        meta_title = t_val
+                    elif not meta_artist:
+                        meta_artist = t_val
+                elif txt.startswith('@'):
+                    continue
+                else:
+                    sec = tick_to_sec(abs_tick)
+                    raw_syllables.append((sec, txt))
+
+    raw_syllables.sort(key=lambda x: x[0])
+
+    lines = []
+    cur_syls = []
+
+    for sec, txt in raw_syllables:
+        is_break = False
+        clean_txt = txt
+        if txt.startswith('/') or txt.startswith('\\'):
+            is_break = True
+            clean_txt = txt[1:]
+        elif '\n' in txt or '\r' in txt:
+            is_break = True
+            clean_txt = txt.replace('\n', '').replace('\r', '')
+
+        if is_break and cur_syls:
+            line_str = "".join(s['text'] for s in cur_syls)
+            lines.append({'text': line_str, 'syllables': cur_syls, 'start_sec': cur_syls[0]['sec']})
+            cur_syls = []
+
+        if clean_txt:
+            cur_syls.append({'sec': sec, 'text': clean_txt})
+
+    if cur_syls:
+        line_str = "".join(s['text'] for s in cur_syls)
+        lines.append({'text': line_str, 'syllables': cur_syls, 'start_sec': cur_syls[0]['sec']})
+
+    return lines, total_duration, meta_title, meta_artist
+
+
+class SongDatabase:
+    def __init__(self, db_path):
+        self.db_path = db_path
+        self.conn = sqlite3.connect(db_path)
+        self.create_tables()
+
+    def create_tables(self):
+        with self.conn:
+            self.conn.execute("""
+                CREATE TABLE IF NOT EXISTS songs (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    code TEXT,
+                    title TEXT,
+                    artist TEXT,
+                    filepath TEXT UNIQUE,
+                    mtime REAL
+                )
+            """)
+            self.conn.execute("CREATE INDEX IF NOT EXISTS idx_code ON songs(code)")
+            self.conn.execute("CREATE INDEX IF NOT EXISTS idx_title ON songs(title)")
+            self.conn.execute("CREATE INDEX IF NOT EXISTS idx_artist ON songs(artist)")
+
+    def index_songs(self, songs_dir, force=False):
+        songs_dir = Path(songs_dir)
+        if not songs_dir.exists():
+            return 0
+
+        audio_files = []
+        for root, _, files in os.walk(songs_dir):
+            for f in files:
+                if f.lower().endswith((".mid", ".kar")):
+                    audio_files.append(Path(root) / f)
+
+        audio_files.sort()
+
+        if not force:
+            cur = self.conn.cursor()
+            cur.execute("SELECT COUNT(*), MAX(mtime) FROM songs")
+            count, max_mtime = cur.fetchone()
+            if count == len(audio_files) and count > 0:
+                return count
+
+        with self.conn:
+            self.conn.execute("DELETE FROM songs")
+            items = []
+            for idx, fp in enumerate(audio_files, 1):
+                try:
+                    mtime = fp.stat().st_mtime
+                except Exception:
+                    mtime = 0.0
+                code, title, artist = parse_filename_metadata(fp, idx)
+                items.append((code, title, artist, str(fp), mtime))
+
+            self.conn.executemany("""
+                INSERT OR REPLACE INTO songs (code, title, artist, filepath, mtime)
+                VALUES (?, ?, ?, ?, ?)
+            """, items)
+
+        return len(audio_files)
+
+    def search(self, query=""):
+        cur = self.conn.cursor()
+        if not query.strip():
+            cur.execute("SELECT code, title, artist, filepath FROM songs ORDER BY code ASC LIMIT 1000")
+        else:
+            q = f"%{query.strip()}%"
+            cur.execute("""
+                SELECT code, title, artist, filepath FROM songs
+                WHERE code LIKE ? OR title LIKE ? OR artist LIKE ? OR filepath LIKE ?
+                ORDER BY code ASC LIMIT 1000
+            """, (q, q, q, q))
+        return cur.fetchall()
+
+    def get_by_code(self, code_str):
+        cur = self.conn.cursor()
+        c = code_str.zfill(5)
+        cur.execute("SELECT code, title, artist, filepath FROM songs WHERE code = ? LIMIT 1", (c,))
+        return cur.fetchone()
+
+    def close(self):
+        self.conn.close()
+
+
+class KaraokeApp(QWidget):
+    def __init__(self, config):
+        super().__init__()
+        self.config = config
+        self.songs_dir = None
+        self.db = None
+        self.soundfont = None
+        self.backgrounds = []
+        self.bg_index = 0
+        self.current_song = None
+        self.fluid_proc = None
+        self.playback_start_time = 0.0
+        self.playback_paused_at = 0.0
+        self.is_paused = False
+        self.is_playing = False
+        self.lyrics_lines = []
+        self.song_duration = 0.0
+
+        self.init_ui()
+
+        self.poll_timer = QTimer(self)
+        self.poll_timer.timeout.connect(self.check_usb_and_media)
+        self.poll_timer.start(2000)
+
+        self.play_timer = QTimer(self)
+        self.play_timer.setInterval(100)
+        self.play_timer.timeout.connect(self.update_playback_ui)
+
+        self.bg_timer = QTimer(self)
+        self.bg_timer.setInterval(15000)
+        self.bg_timer.timeout.connect(self.rotate_background)
+
+        self.check_usb_and_media()
+
+    def init_ui(self):
+        self.setWindowTitle("KatoyOS Karaoke")
+        self.setWindowIcon(QIcon.fromTheme("katoyos"))
+        if self.config.get("FULLSCREEN") == "1":
+            self.showFullScreen()
+        else:
+            self.resize(1024, 768)
+
+        self.setAutoFillBackground(True)
+        p = self.palette()
+        p.setColor(QPalette.ColorRole.Window, QColor(18, 22, 32))
+        p.setColor(QPalette.ColorRole.WindowText, QColor(240, 240, 240))
+        self.setPalette(p)
+
+        self.layout = QVBoxLayout(self)
+        self.layout.setContentsMargins(0, 0, 0, 0)
+
+        self.stack = QStackedWidget()
+        self.layout.addWidget(self.stack)
+
+        self.no_usb_page = self.create_no_usb_page()
+        self.stack.addWidget(self.no_usb_page)
+
+        self.library_page = self.create_library_page()
+        self.stack.addWidget(self.library_page)
+
+        self.player_page = self.create_player_page()
+        self.stack.addWidget(self.player_page)
+
+        self.stack.setCurrentWidget(self.no_usb_page)
+
+        QShortcut(QKeySequence("Esc"), self, self.on_escape_pressed)
+        QShortcut(QKeySequence("F5"), self, self.on_rescan_pressed)
+        QShortcut(QKeySequence("Space"), self, self.toggle_play_pause)
+
+    def create_no_usb_page(self):
+        w = QWidget()
+        lay = QVBoxLayout(w)
+        lay.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+        icon_lbl = QLabel("🎤")
+        icon_lbl.setFont(QFont("Inter", 64))
+        icon_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+        t = QLabel("Please Insert Karaoke USB Drive")
+        t.setFont(QFont("Inter", 26, QFont.Weight.Bold))
+        t.setStyleSheet("color: #00d2ff; margin-top: 10px;")
+        t.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+        sub = QLabel("Scanning USB drives for MIDI/.KAR songs...\nInsert a flash drive containing your songs folder.")
+        sub.setFont(QFont("Inter", 14))
+        sub.setStyleSheet("color: #a0a5b5; margin-top: 10px;")
+        sub.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+        lay.addWidget(icon_lbl)
+        lay.addWidget(t)
+        lay.addWidget(sub)
+        return w
+
+    def create_library_page(self):
+        w = QWidget()
+        lay = QVBoxLayout(w)
+        lay.setContentsMargins(30, 30, 30, 30)
+
+        header = QHBoxLayout()
+        title = QLabel("KatoyOS Karaoke Library")
+        title.setFont(QFont("Inter", 22, QFont.Weight.Bold))
+        title.setStyleSheet("color: #00d2ff;")
+
+        self.rescan_btn = QPushButton("🔄 Rescan USB")
+        self.rescan_btn.setFont(QFont("Inter", 11))
+        self.rescan_btn.setStyleSheet("""
+            QPushButton { background-color: #2b3245; color: white; border-radius: 6px; padding: 8px 16px; }
+            QPushButton:hover { background-color: #3b445c; }
+        """)
+        self.rescan_btn.clicked.connect(self.on_rescan_pressed)
+
+        header.addWidget(title)
+        header.addStretch()
+        header.addWidget(self.rescan_btn)
+        lay.addLayout(header)
+
+        search_lay = QHBoxLayout()
+        search_lbl = QLabel("Search:")
+        search_lbl.setFont(QFont("Inter", 14))
+
+        self.search_input = QLineEdit()
+        self.search_input.setFont(QFont("Inter", 14))
+        self.search_input.setPlaceholderText("Enter Song Code (e.g. 00001), Title, or Artist...")
+        self.search_input.setStyleSheet("""
+            QLineEdit { background-color: #1e2433; color: white; border: 2px solid #3b445c;
+                        border-radius: 8px; padding: 8px 14px; }
+            QLineEdit:focus { border: 2px solid #00d2ff; }
+        """)
+        self.search_input.textChanged.connect(self.filter_library)
+        self.search_input.returnPressed.connect(self.play_selected_or_first)
+
+        search_lay.addWidget(search_lbl)
+        search_lay.addWidget(self.search_input)
+        lay.addLayout(search_lay)
+
+        self.table = QTableWidget()
+        self.table.setColumnCount(3)
+        self.table.setHorizontalHeaderLabels(["Code", "Title", "Artist"])
+        self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
+        self.table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+        self.table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
+        self.table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self.table.setStyleSheet("""
+            QTableWidget { background-color: #1a1f2c; color: white; gridline-color: #2b3245;
+                           border: 1px solid #2b3245; border-radius: 8px; font-size: 14px; }
+            QTableWidget::item { padding: 8px; }
+            QTableWidget::item:selected { background-color: #007acc; color: white; }
+            QHeaderView::section { background-color: #252c3d; color: #00d2ff; font-weight: bold;
+                                   padding: 8px; border: none; }
+        """)
+        self.table.doubleClicked.connect(self.play_selected_song)
+        lay.addWidget(self.table, 1)
+
+        footer = QHBoxLayout()
+        self.status_lbl = QLabel("Ready")
+        self.status_lbl.setFont(QFont("Inter", 11))
+        self.status_lbl.setStyleSheet("color: #8a92a6;")
+
+        hints = QLabel("Nav: [Up/Down] Select | [Enter] Play | [Space] Pause | [Esc] Song List / Back")
+        hints.setFont(QFont("Inter", 11))
+        hints.setStyleSheet("color: #8a92a6;")
+
+        footer.addWidget(self.status_lbl)
+        footer.addStretch()
+        footer.addWidget(hints)
+        lay.addLayout(footer)
+
+        return w
+
+    def create_player_page(self):
+        w = QWidget()
+        lay = QVBoxLayout(w)
+        lay.setContentsMargins(40, 30, 40, 30)
+
+        self.bg_label = QLabel(w)
+        self.bg_label.setScaledContents(True)
+        self.bg_label.lower()
+
+        top_bar = QHBoxLayout()
+
+        self.p_code_lbl = QLabel("00001")
+        self.p_code_lbl.setFont(QFont("Inter", 20, QFont.Weight.Bold))
+        self.p_code_lbl.setStyleSheet("color: #00d2ff; background: rgba(0,0,0,0.6); padding: 4px 12px; border-radius: 6px;")
+
+        self.p_title_lbl = QLabel("Song Title")
+        self.p_title_lbl.setFont(QFont("Inter", 22, QFont.Weight.Bold))
+        self.p_title_lbl.setStyleSheet("color: white; background: rgba(0,0,0,0.6); padding: 4px 12px; border-radius: 6px;")
+
+        self.p_artist_lbl = QLabel("Artist")
+        self.p_artist_lbl.setFont(QFont("Inter", 16))
+        self.p_artist_lbl.setStyleSheet("color: #d0d5e0; background: rgba(0,0,0,0.6); padding: 4px 12px; border-radius: 6px;")
+
+        top_bar.addWidget(self.p_code_lbl)
+        top_bar.addWidget(self.p_title_lbl)
+        top_bar.addWidget(self.p_artist_lbl)
+        top_bar.addStretch()
+
+        stop_btn = QPushButton("🔙 Song List")
+        stop_btn.setFont(QFont("Inter", 12))
+        stop_btn.setStyleSheet("background: rgba(43,50,69,0.8); color: white; border-radius: 6px; padding: 8px 16px;")
+        stop_btn.clicked.connect(self.stop_playback)
+        top_bar.addWidget(stop_btn)
+
+        lay.addLayout(top_bar)
+
+        self.lyrics_container = QVBoxLayout()
+        self.lyrics_container.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+        self.lyric_prev_lbl = QLabel("")
+        self.lyric_prev_lbl.setFont(QFont("Inter", 20))
+        self.lyric_prev_lbl.setStyleSheet("color: rgba(255,255,255,0.4); background: rgba(0,0,0,0.4); border-radius: 8px; padding: 6px;")
+        self.lyric_prev_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+        self.lyric_curr_lbl = QLabel("♪ ... ♪")
+        self.lyric_curr_lbl.setFont(QFont("Inter", 32, QFont.Weight.Bold))
+        self.lyric_curr_lbl.setStyleSheet("color: #00f0ff; background: rgba(0,0,0,0.6); border-radius: 12px; padding: 14px;")
+        self.lyric_curr_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+        self.lyric_next_lbl = QLabel("")
+        self.lyric_next_lbl.setFont(QFont("Inter", 20))
+        self.lyric_next_lbl.setStyleSheet("color: rgba(255,255,255,0.6); background: rgba(0,0,0,0.4); border-radius: 8px; padding: 6px;")
+        self.lyric_next_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+        self.lyrics_container.addStretch()
+        self.lyrics_container.addWidget(self.lyric_prev_lbl)
+        self.lyrics_container.addWidget(self.lyric_curr_lbl)
+        self.lyrics_container.addWidget(self.lyric_next_lbl)
+        self.lyrics_container.addStretch()
+
+        lay.addLayout(self.lyrics_container, 1)
+
+        bottom_bar = QVBoxLayout()
+
+        time_lay = QHBoxLayout()
+        self.time_lbl = QLabel("00:00 / 00:00")
+        self.time_lbl.setFont(QFont("Inter", 12))
+        self.time_lbl.setStyleSheet("color: white; background: rgba(0,0,0,0.5); padding: 4px 8px; border-radius: 4px;")
+        time_lay.addStretch()
+        time_lay.addWidget(self.time_lbl)
+
+        self.progress_bar = QProgressBar()
+        self.progress_bar.setFixedHeight(8)
+        self.progress_bar.setTextVisible(False)
+        self.progress_bar.setStyleSheet("""
+            QProgressBar { background: rgba(255,255,255,0.2); border-radius: 4px; border: none; }
+            QProgressBar::chunk { background: #00d2ff; border-radius: 4px; }
+        """)
+
+        ctrl_lay = QHBoxLayout()
+        ctrl_lay.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+        self.pause_btn = QPushButton("⏸ Pause")
+        self.pause_btn.setFont(QFont("Inter", 13))
+        self.pause_btn.setStyleSheet("background: rgba(0,122,204,0.8); color: white; border-radius: 6px; padding: 8px 20px;")
+        self.pause_btn.clicked.connect(self.toggle_play_pause)
+
+        ctrl_lay.addWidget(self.pause_btn)
+
+        bottom_bar.addLayout(time_lay)
+        bottom_bar.addWidget(self.progress_bar)
+        bottom_bar.addLayout(ctrl_lay)
+
+        lay.addLayout(bottom_bar)
+        return w
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        if hasattr(self, 'bg_label') and self.bg_label:
+            self.bg_label.resize(self.size())
+
+    def check_usb_and_media(self):
+        conf_dir = self.config.get("SONGS_DIR", "auto")
+
+        if conf_dir == "auto":
+            usb_dir = detect_usb_songs_dir()
+        else:
+            p = Path(conf_dir)
+            usb_dir = p if p.exists() else None
+
+        if not usb_dir:
+            if self.songs_dir is not None:
+                self.stop_playback()
+                self.songs_dir = None
+                if self.db:
+                    self.db.close()
+                    self.db = None
+            self.stack.setCurrentWidget(self.no_usb_page)
+            return
+
+        if self.songs_dir != usb_dir:
+            self.songs_dir = usb_dir
+            db_path = (usb_dir / ".katoy-karaoke.db") if usb_dir.is_dir() else (usb_dir.parent / ".katoy-karaoke.db")
+            try:
+                self.db = SongDatabase(db_path)
+                count = self.db.index_songs(self.songs_dir)
+                self.status_lbl.setText(f"Loaded {count} songs from {self.songs_dir.name}")
+            except Exception as e:
+                self.status_lbl.setText(f"Error indexing songs: {e}")
+
+            self.soundfont = find_soundfont(self.config.get("SOUNDFONT"), self.songs_dir)
+            self.backgrounds = find_backgrounds(self.config.get("BACKGROUND"), self.songs_dir)
+            self.update_background_image()
+
+            self.filter_library()
+            if self.stack.currentWidget() == self.no_usb_page:
+                self.stack.setCurrentWidget(self.library_page)
+
+    def filter_library(self):
+        if not self.db:
+            return
+        query = self.search_input.text().strip()
+        rows = self.db.search(query)
+
+        self.table.setRowCount(len(rows))
+        for row_idx, (code, title, artist, filepath) in enumerate(rows):
+            item_code = QTableWidgetItem(code)
+            item_title = QTableWidgetItem(title)
+            item_artist = QTableWidgetItem(artist)
+
+            item_code.setData(Qt.ItemDataRole.UserRole, filepath)
+
+            self.table.setItem(row_idx, 0, item_code)
+            self.table.setItem(row_idx, 1, item_title)
+            self.table.setItem(row_idx, 2, item_artist)
+
+        if len(rows) > 0:
+            self.table.selectRow(0)
+
+    def on_rescan_pressed(self):
+        if self.db and self.songs_dir:
+            self.status_lbl.setText("Rescanning USB drive...")
+            QApplication.processEvents()
+            count = self.db.index_songs(self.songs_dir, force=True)
+            self.status_lbl.setText(f"Rescan complete. Indexed {count} songs.")
+            self.filter_library()
+
+    def play_selected_or_first(self):
+        query = self.search_input.text().strip()
+        if query and self.db:
+            match = self.db.get_by_code(query)
+            if match:
+                code, title, artist, filepath = match
+                self.start_playback(code, title, artist, filepath)
+                return
+
+        curr_row = self.table.currentRow()
+        if curr_row >= 0:
+            self.play_selected_song()
+
+    def play_selected_song(self):
+        curr_row = self.table.currentRow()
+        if curr_row < 0:
+            return
+        code = self.table.item(curr_row, 0).text()
+        title = self.table.item(curr_row, 1).text()
+        artist = self.table.item(curr_row, 2).text()
+        filepath = self.table.item(curr_row, 0).data(Qt.ItemDataRole.UserRole)
+        self.start_playback(code, title, artist, filepath)
+
+    def start_playback(self, code, title, artist, filepath):
+        self.stop_playback()
+
+        if not self.soundfont:
+            QMessageBox.warning(self, "SoundFont Missing",
+                                "No SoundFont (.sf2) found on USB drive or system.\n"
+                                "Please place a SoundFont file (.sf2) on your USB drive.")
+            return
+
+        fp = Path(filepath)
+        if not fp.exists():
+            QMessageBox.warning(self, "File Not Found", f"Song file missing:\n{filepath}")
+            return
+
+        self.current_song = (code, title, artist, filepath)
+        self.p_code_lbl.setText(code)
+        self.p_title_lbl.setText(title)
+        self.p_artist_lbl.setText(artist)
+
+        lines, duration, m_title, m_artist = extract_midi_lyrics_and_duration(filepath)
+        self.lyrics_lines = lines
+        self.song_duration = duration if duration > 0 else 180.0
+
+        if m_title and title == fp.stem:
+            self.p_title_lbl.setText(m_title)
+        if m_artist and artist == "Unknown Artist":
+            self.p_artist_lbl.setText(m_artist)
+
+        audio_driver = self.config.get("AUDIO_DRIVER", "pulseaudio")
+        cmd = ["fluidsynth", "-i", "-a", audio_driver, "-g", "0.8", str(self.soundfont), str(fp)]
+
+        try:
+            self.fluid_proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except Exception as e:
+            QMessageBox.critical(self, "FluidSynth Error", f"Failed to start FluidSynth:\n{e}")
+            return
+
+        self.playback_start_time = time.time()
+        self.is_playing = True
+        self.is_paused = False
+        self.pause_btn.setText("⏸ Pause")
+
+        self.update_background_image()
+        self.bg_timer.start()
+        self.play_timer.start()
+
+        self.stack.setCurrentWidget(self.player_page)
+
+    def toggle_play_pause(self):
+        if not self.is_playing or not self.fluid_proc:
+            return
+
+        if self.is_paused:
+            # Resume
+            try:
+                self.fluid_proc.send_signal(18)  # SIGCONT
+            except Exception:
+                pass
+            self.playback_start_time += (time.time() - self.playback_paused_at)
+            self.is_paused = False
+            self.pause_btn.setText("⏸ Pause")
+        else:
+            # Pause
+            try:
+                self.fluid_proc.send_signal(19)  # SIGSTOP
+            except Exception:
+                pass
+            self.playback_paused_at = time.time()
+            self.is_paused = True
+            self.pause_btn.setText("▶ Resume")
+
+    def stop_playback(self):
+        self.play_timer.stop()
+        self.bg_timer.stop()
+
+        if self.fluid_proc:
+            try:
+                self.fluid_proc.terminate()
+                self.fluid_proc.wait(timeout=1.0)
+            except Exception:
+                try:
+                    self.fluid_proc.kill()
+                except Exception:
+                    pass
+            self.fluid_proc = None
+
+        self.is_playing = False
+        self.is_paused = False
+        self.current_song = None
+
+        if self.stack.currentWidget() == self.player_page:
+            self.stack.setCurrentWidget(self.library_page)
+            self.search_input.setFocus()
+
+    def update_playback_ui(self):
+        if not self.is_playing:
+            return
+
+        if self.fluid_proc and self.fluid_proc.poll() is not None and not self.is_paused:
+            self.stop_playback()
+            return
+
+        if self.is_paused:
+            elapsed = self.playback_paused_at - self.playback_start_time
+        else:
+            elapsed = time.time() - self.playback_start_time
+
+        elapsed = max(0.0, elapsed)
+        dur = max(1.0, self.song_duration)
+
+        m_el, s_el = divmod(int(elapsed), 60)
+        m_du, s_du = divmod(int(dur), 60)
+        self.time_lbl.setText(f"{m_el:02d}:{s_el:02d} / {m_du:02d}:{s_du:02d}")
+
+        pct = int((elapsed / dur) * 100)
+        self.progress_bar.setValue(min(100, pct))
+
+        self.render_lyrics(elapsed)
+
+    def render_lyrics(self, elapsed_sec):
+        if not self.lyrics_lines:
+            self.lyric_prev_lbl.setText("")
+            self.lyric_curr_lbl.setText("♪ [Instrumental / No Lyrics] ♪")
+            self.lyric_next_lbl.setText("")
+            return
+
+        curr_idx = -1
+        for idx, line in enumerate(self.lyrics_lines):
+            if elapsed_sec >= line['start_sec']:
+                curr_idx = idx
+            else:
+                break
+
+        if curr_idx == -1:
+            self.lyric_prev_lbl.setText("")
+            self.lyric_curr_lbl.setText("♪ ... ♪")
+            self.lyric_next_lbl.setText(self.lyrics_lines[0]['text'] if len(self.lyrics_lines) > 0 else "")
+            return
+
+        line_data = self.lyrics_lines[curr_idx]
+        prev_text = self.lyrics_lines[curr_idx - 1]['text'] if curr_idx > 0 else ""
+        next_text = self.lyrics_lines[curr_idx + 1]['text'] if curr_idx + 1 < len(self.lyrics_lines) else ""
+
+        # Syllable/word highlighting
+        highlighted_parts = []
+        for syl in line_data['syllables']:
+            txt = syl['text']
+            if elapsed_sec >= syl['sec']:
+                highlighted_parts.append(f"<span style='color: #00ffff;'>{txt}</span>")
+            else:
+                highlighted_parts.append(f"<span style='color: #ffffff;'>{txt}</span>")
+
+        curr_html = "".join(highlighted_parts)
+
+        self.lyric_prev_lbl.setText(prev_text)
+        self.lyric_curr_lbl.setText(curr_html)
+        self.lyric_next_lbl.setText(next_text)
+
+    def rotate_background(self):
+        if len(self.backgrounds) > 1:
+            self.bg_index = (self.bg_index + 1) % len(self.backgrounds)
+            self.update_background_image()
+
+    def update_background_image(self):
+        if self.backgrounds and self.backgrounds[self.bg_index].exists():
+            pix = QPixmap(str(self.backgrounds[self.bg_index]))
+            self.bg_label.setPixmap(pix)
+
+    def on_escape_pressed(self):
+        if self.stack.currentWidget() == self.player_page:
+            self.stop_playback()
+        elif self.stack.currentWidget() == self.library_page:
+            self.close()
+
+    def closeEvent(self, event):
+        self.stop_playback()
+        if self.db:
+            self.db.close()
+        event.accept()
+
+
+def main():
+    config = load_config()
+    app = QApplication(sys.argv)
+    app.setApplicationName("KatoyOS Karaoke")
+
+    player = KaraokeApp(config)
+    player.show()
+
+    sys.exit(app.exec())
+
+
+if __name__ == "__main__":
+    main()

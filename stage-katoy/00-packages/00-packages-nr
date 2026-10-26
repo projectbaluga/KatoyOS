@@ -36,6 +36,7 @@ pipewire
 pipewire-pulse
 wireplumber
 pavucontrol-qt
+timgm6mb-soundfont
 # boot splash + Welcome app runtime
 plymouth
 python3-pyqt6

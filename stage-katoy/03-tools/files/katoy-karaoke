@@ -18,9 +18,11 @@ import time
 import sqlite3
 import random
 import subprocess
+import ctypes
+import ctypes.util
 from pathlib import Path
 
-from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QObject
+from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QObject, QThread
 from PyQt6.QtGui import QFont, QIcon, QPixmap, QKeySequence, QShortcut, QColor, QPalette
 from PyQt6.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit,
@@ -28,13 +30,237 @@ from PyQt6.QtWidgets import (
     QProgressBar, QMessageBox, QFrame, QListWidget, QListWidgetItem
 )
 
+
+class SongIndexerWorker(QThread):
+    """Background thread worker for indexing song library and searching media assets."""
+
+    progress = pyqtSignal(int, int)
+    finished = pyqtSignal(int, object, object, str)
+
+    def __init__(self, usb_dir, config, force=False):
+        super().__init__()
+        self.usb_dir = Path(usb_dir)
+        self.config = config
+        self.force = force
+
+    def run(self):
+        db_path = (self.usb_dir / ".katoy-karaoke.db") if self.usb_dir.is_dir() else (self.usb_dir.parent / ".katoy-karaoke.db")
+        db_instance = None
+        count = 0
+        read_only_msg = ""
+
+        def prog_cb(cur, total):
+            self.progress.emit(cur, total)
+
+        try:
+            db_instance = SongDatabase(db_path)
+            count = db_instance.index_songs(self.usb_dir, force=self.force, progress_callback=prog_cb)
+        except Exception:
+            if db_instance:
+                try:
+                    db_instance.close()
+                except Exception:
+                    pass
+                db_instance = None
+
+        if not db_instance:
+            fallback_dir = Path("/tmp/katoy_karaoke")
+            try:
+                fallback_dir.mkdir(parents=True, exist_ok=True)
+                safe_name = re.sub(r'[^a-zA-Z0-9_-]', '_', self.usb_dir.name)
+                fallback_db_path = fallback_dir / f".katoy-karaoke-{safe_name}.db"
+                db_instance = SongDatabase(fallback_db_path)
+                count = db_instance.index_songs(self.usb_dir, force=self.force, progress_callback=prog_cb)
+                read_only_msg = " (read-only mode)"
+            except Exception as e:
+                print(f"Fallback indexing failed: {e}")
+
+        sf = find_soundfont(self.config.get("SOUNDFONT"), self.usb_dir)
+        bgs = find_backgrounds(self.config.get("BACKGROUND"), self.usb_dir)
+
+        self.finished.emit(count, sf, bgs, read_only_msg)
+
 import mido
+
+
+class PersistentFluidSynth:
+    """CTypes wrapper around libfluidsynth.so to keep SoundFonts loaded in RAM."""
+
+    FLUID_PLAYER_READY = 0
+    FLUID_PLAYER_PLAYING = 1
+    FLUID_PLAYER_STOPPING = 2
+    FLUID_PLAYER_DONE = 3
+
+    def __init__(self, soundfont_path, audio_driver="pulseaudio"):
+        self.soundfont_path = Path(soundfont_path)
+        self.audio_driver = audio_driver
+        self.lib = None
+        self.settings = None
+        self.synth = None
+        self.adriver = None
+        self.player = None
+        self.sfont_id = -1
+        self.is_initialized = False
+
+        self._init_library()
+
+    def _init_library(self):
+        lib_path = ctypes.util.find_library("fluidsynth") or "libfluidsynth.so.3"
+        try:
+            self.lib = ctypes.CDLL(lib_path)
+        except Exception as e:
+            print(f"Failed to load libfluidsynth ({lib_path}): {e}")
+            return
+
+        try:
+            self.lib.new_fluid_settings.restype = ctypes.c_void_p
+
+            self.lib.fluid_settings_setstr.argtypes = [ctypes.c_void_p, ctypes.c_char_p, ctypes.c_char_p]
+            self.lib.fluid_settings_setnum.argtypes = [ctypes.c_void_p, ctypes.c_char_p, ctypes.c_double]
+            self.lib.fluid_settings_setint.argtypes = [ctypes.c_void_p, ctypes.c_char_p, ctypes.c_int]
+
+            self.lib.new_fluid_synth.argtypes = [ctypes.c_void_p]
+            self.lib.new_fluid_synth.restype = ctypes.c_void_p
+
+            self.lib.new_fluid_audio_driver.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+            self.lib.new_fluid_audio_driver.restype = ctypes.c_void_p
+
+            self.lib.new_fluid_player.argtypes = [ctypes.c_void_p]
+            self.lib.new_fluid_player.restype = ctypes.c_void_p
+
+            self.lib.fluid_synth_sfload.argtypes = [ctypes.c_void_p, ctypes.c_char_p, ctypes.c_int]
+            self.lib.fluid_synth_sfload.restype = ctypes.c_int
+
+            self.lib.fluid_player_add.argtypes = [ctypes.c_void_p, ctypes.c_char_p]
+            self.lib.fluid_player_add.restype = ctypes.c_int
+
+            self.lib.fluid_player_play.argtypes = [ctypes.c_void_p]
+            self.lib.fluid_player_play.restype = ctypes.c_int
+
+            self.lib.fluid_player_stop.argtypes = [ctypes.c_void_p]
+            self.lib.fluid_player_stop.restype = ctypes.c_int
+
+            self.lib.fluid_player_get_status.argtypes = [ctypes.c_void_p]
+            self.lib.fluid_player_get_status.restype = ctypes.c_int
+
+            self.lib.fluid_player_get_current_tick.argtypes = [ctypes.c_void_p]
+            self.lib.fluid_player_get_current_tick.restype = ctypes.c_int
+
+            self.lib.fluid_player_get_total_ticks.argtypes = [ctypes.c_void_p]
+            self.lib.fluid_player_get_total_ticks.restype = ctypes.c_int
+
+            self.lib.delete_fluid_player.argtypes = [ctypes.c_void_p]
+            self.lib.delete_fluid_audio_driver.argtypes = [ctypes.c_void_p]
+            self.lib.delete_fluid_synth.argtypes = [ctypes.c_void_p]
+            self.lib.delete_fluid_settings.argtypes = [ctypes.c_void_p]
+
+            if hasattr(self.lib, 'fluid_synth_all_notes_off'):
+                self.lib.fluid_synth_all_notes_off.argtypes = [ctypes.c_void_p, ctypes.c_int]
+
+            self.settings = self.lib.new_fluid_settings()
+            if not self.settings:
+                return
+
+            # Pi 3B Hardware Tuning
+            drv_b = self.audio_driver.encode('utf-8')
+            self.lib.fluid_settings_setstr(self.settings, b"audio.driver", drv_b)
+            self.lib.fluid_settings_setnum(self.settings, b"synth.sample-rate", ctypes.c_double(44100.0))
+            self.lib.fluid_settings_setint(self.settings, b"synth.polyphony", ctypes.c_int(64))
+            self.lib.fluid_settings_setint(self.settings, b"synth.reverb.active", ctypes.c_int(0))
+            self.lib.fluid_settings_setint(self.settings, b"synth.chorus.active", ctypes.c_int(0))
+
+            self.synth = self.lib.new_fluid_synth(self.settings)
+            if not self.synth:
+                return
+
+            self.adriver = self.lib.new_fluid_audio_driver(self.settings, self.synth)
+            if not self.adriver:
+                return
+
+            if self.soundfont_path.exists():
+                sf_b = str(self.soundfont_path).encode('utf-8')
+                self.sfont_id = self.lib.fluid_synth_sfload(self.synth, sf_b, 1)
+
+            self.is_initialized = True
+        except Exception as e:
+            print(f"PersistentFluidSynth init error: {e}")
+
+    def load_song(self, midi_path):
+        if not self.is_initialized:
+            return False
+
+        self.stop()
+        if self.player:
+            try:
+                self.lib.delete_fluid_player(self.player)
+            except Exception:
+                pass
+            self.player = None
+
+        try:
+            self.player = self.lib.new_fluid_player(self.synth)
+            if not self.player:
+                return False
+            midi_b = str(midi_path).encode('utf-8')
+            res = self.lib.fluid_player_add(self.player, midi_b)
+            return res == 0
+        except Exception as e:
+            print(f"Error loading song into player: {e}")
+            return False
+
+    def play(self):
+        if self.player:
+            return self.lib.fluid_player_play(self.player) == 0
+        return False
+
+    def stop(self):
+        if self.player:
+            try:
+                self.lib.fluid_player_stop(self.player)
+                if hasattr(self.lib, 'fluid_synth_all_notes_off') and self.synth:
+                    for ch in range(16):
+                        self.lib.fluid_synth_all_notes_off(self.synth, ch)
+            except Exception:
+                pass
+
+    def get_status(self):
+        if self.player:
+            return self.lib.fluid_player_get_status(self.player)
+        return self.FLUID_PLAYER_DONE
+
+    def get_current_tick(self):
+        if self.player:
+            return self.lib.fluid_player_get_current_tick(self.player)
+        return 0
+
+    def get_total_ticks(self):
+        if self.player:
+            return self.lib.fluid_player_get_total_ticks(self.player)
+        return 0
+
+    def cleanup(self):
+        self.stop()
+        if self.player:
+            self.lib.delete_fluid_player(self.player)
+            self.player = None
+        if self.adriver:
+            self.lib.delete_fluid_audio_driver(self.adriver)
+            self.adriver = None
+        if self.synth:
+            self.lib.delete_fluid_synth(self.synth)
+            self.synth = None
+        if self.settings:
+            self.lib.delete_fluid_settings(self.settings)
+            self.settings = None
+        self.is_initialized = False
 
 CONFIG_FILE = Path("/etc/katoyos/karaoke.conf")
 DEFAULT_WALLPAPER = Path("/usr/share/backgrounds/katoyos/default.png")
 SYSTEM_SOUNDFONTS = [
+    Path("/usr/share/sounds/sf2/TimGM6mb.sf2"),
     Path("/usr/share/sounds/sf2/FluidR3_GM.sf2"),
     Path("/usr/share/sounds/sf2/default.sf2"),
+    Path("/usr/share/soundfonts/TimGM6mb.sf2"),
     Path("/usr/share/soundfonts/FluidR3_GM.sf2"),
     Path("/usr/share/soundfonts/default.sf2"),
 ]
@@ -161,9 +387,10 @@ def find_backgrounds(configured_path, usb_dir):
     return []
 
 
-def parse_filename_metadata(filepath, code_num):
+def parse_filename_metadata(filepath):
     stem = filepath.stem
-    code_str = f"{code_num:05d}"
+    has_explicit_code = False
+    code_str = None
     title = stem
     artist = "Unknown Artist"
 
@@ -171,6 +398,7 @@ def parse_filename_metadata(filepath, code_num):
     if m:
         c_code, rest = m.group(1), m.group(2)
         code_str = c_code.zfill(5)
+        has_explicit_code = True
         if " - " in rest:
             parts = rest.split(" - ", 1)
             artist, title = parts[0].strip(), parts[1].strip()
@@ -180,17 +408,25 @@ def parse_filename_metadata(filepath, code_num):
         parts = stem.split(" - ", 1)
         artist, title = parts[0].strip(), parts[1].strip()
 
-    return code_str, title, artist
+    return has_explicit_code, code_str, title, artist
+
+
+def load_midifile_robust(filepath):
+    """Loads a MidiFile with clip=True and multi-encoding fallback (utf-8 -> cp1252 -> latin1)."""
+    encodings = ['utf-8', 'cp1252', 'latin1']
+    for enc in encodings:
+        try:
+            return mido.MidiFile(filepath, charset=enc, clip=True)
+        except Exception:
+            continue
+    return mido.MidiFile(filepath, clip=True)
 
 
 def process_midi_file(src_path, dst_path, semi_tones, tempo_multiplier):
     if semi_tones == 0 and abs(tempo_multiplier - 1.0) < 1e-4:
         return src_path
     try:
-        try:
-            mid = mido.MidiFile(src_path)
-        except Exception:
-            mid = mido.MidiFile(src_path, charset='latin1')
+        mid = load_midifile_robust(src_path)
 
         has_tempo_msg = any(msg.type == 'set_tempo' for track in mid.tracks for msg in track)
 
@@ -220,10 +456,7 @@ def pitch_transpose_midi_file(src_path, dst_path, semi_tones):
 
 def extract_midi_lyrics_and_duration(filepath):
     try:
-        try:
-            mid = mido.MidiFile(filepath)
-        except Exception:
-            mid = mido.MidiFile(filepath, charset='latin1')
+        mid = load_midifile_robust(filepath)
     except Exception as e:
         return [], 0.0, Path(filepath).stem, ""
 
@@ -328,57 +561,105 @@ class SongDatabase:
                     title TEXT,
                     artist TEXT,
                     filepath TEXT UNIQUE,
-                    mtime REAL
+                    mtime REAL,
+                    size INTEGER DEFAULT 0
+                )
+            """)
+            self.conn.execute("""
+                CREATE TABLE IF NOT EXISTS code_mapping (
+                    filepath TEXT PRIMARY KEY,
+                    code TEXT
                 )
             """)
             self.conn.execute("CREATE INDEX IF NOT EXISTS idx_code ON songs(code)")
             self.conn.execute("CREATE INDEX IF NOT EXISTS idx_title ON songs(title)")
             self.conn.execute("CREATE INDEX IF NOT EXISTS idx_artist ON songs(artist)")
 
-    def index_songs(self, songs_dir, force=False):
+    def index_songs(self, songs_dir, force=False, progress_callback=None):
         songs_dir = Path(songs_dir)
         if not songs_dir.exists():
             return 0
 
         audio_files = []
+        total_disk_size = 0
+        latest_on_disk_mtime = 0.0
+
         for root, _, files in os.walk(songs_dir):
             for f in files:
                 if f.lower().endswith((".mid", ".kar")):
-                    audio_files.append(Path(root) / f)
+                    fp = Path(root) / f
+                    audio_files.append(fp)
+                    try:
+                        st = fp.stat()
+                        total_disk_size += st.st_size
+                        if st.st_mtime > latest_on_disk_mtime:
+                            latest_on_disk_mtime = st.st_mtime
+                    except Exception:
+                        pass
 
         audio_files.sort()
 
-        latest_on_disk_mtime = 0.0
-        for fp in audio_files:
+        if not force:
+            cur = self.conn.cursor()
             try:
-                m = fp.stat().st_mtime
-                if m > latest_on_disk_mtime:
-                    latest_on_disk_mtime = m
+                cur.execute("SELECT COUNT(*), MAX(mtime), SUM(size) FROM songs")
+                row = cur.fetchone()
+                count, max_mtime, sum_size = row[0], row[1], (row[2] or 0)
+                if count == len(audio_files) and count > 0 and max_mtime is not None:
+                    if latest_on_disk_mtime <= max_mtime and sum_size == total_disk_size:
+                        return count
             except Exception:
                 pass
 
-        if not force:
-            cur = self.conn.cursor()
-            cur.execute("SELECT COUNT(*), MAX(mtime) FROM songs")
-            count, max_mtime = cur.fetchone()
-            if count == len(audio_files) and count > 0 and max_mtime is not None:
-                if latest_on_disk_mtime <= max_mtime:
-                    return count
+        cur = self.conn.cursor()
+        cur.execute("SELECT filepath, code FROM code_mapping")
+        existing_mappings = dict(cur.fetchall())
+
+        used_codes = set(existing_mappings.values())
 
         with self.conn:
             self.conn.execute("DELETE FROM songs")
             items = []
-            for idx, fp in enumerate(audio_files, 1):
+            next_auto_code = 1
+
+            total_files = len(audio_files)
+            for idx_fp, fp in enumerate(audio_files, 1):
+                if progress_callback and total_files > 0 and idx_fp % 50 == 0:
+                    progress_callback(idx_fp, total_files)
+
+                fp_str = str(fp)
                 try:
-                    mtime = fp.stat().st_mtime
+                    st = fp.stat()
+                    mtime = st.st_mtime
+                    fsize = st.st_size
                 except Exception:
                     mtime = 0.0
-                code, title, artist = parse_filename_metadata(fp, idx)
-                items.append((code, title, artist, str(fp), mtime))
+                    fsize = 0
+
+                has_explicit, code_str, title, artist = parse_filename_metadata(fp)
+
+                if has_explicit:
+                    code = code_str
+                elif fp_str in existing_mappings:
+                    code = existing_mappings[fp_str]
+                else:
+                    while f"{next_auto_code:05d}" in used_codes:
+                        next_auto_code += 1
+                    code = f"{next_auto_code:05d}"
+                    used_codes.add(code)
+                    existing_mappings[fp_str] = code
+                    next_auto_code += 1
+
+                self.conn.execute(
+                    "INSERT OR REPLACE INTO code_mapping (filepath, code) VALUES (?, ?)",
+                    (fp_str, code)
+                )
+
+                items.append((code, title, artist, fp_str, mtime, fsize))
 
             self.conn.executemany("""
-                INSERT OR REPLACE INTO songs (code, title, artist, filepath, mtime)
-                VALUES (?, ?, ?, ?, ?)
+                INSERT OR REPLACE INTO songs (code, title, artist, filepath, mtime, size)
+                VALUES (?, ?, ?, ?, ?, ?)
             """, items)
 
         return len(audio_files)
@@ -419,6 +700,7 @@ class KaraokeApp(QWidget):
         self.reservation_queue = []  # List of tuples: (code, title, artist, filepath)
         self.pitch_key = 0  # -6 to +6
         self.tempo_multiplier = 1.0  # 0.5 to 1.5
+        self.persistent_synth = None
         self.fluid_proc = None
         self.playback_start_time = 0.0
         self.playback_paused_at = 0.0
@@ -634,7 +916,20 @@ class KaraokeApp(QWidget):
         self.status_lbl = QLabel("Ready")
         self.status_lbl.setFont(QFont("Inter", 11))
         self.status_lbl.setStyleSheet("color: #8a92a6;")
+
+        self.index_progress_bar = QProgressBar()
+        self.index_progress_bar.setFixedWidth(180)
+        self.index_progress_bar.setFixedHeight(14)
+        self.index_progress_bar.setTextVisible(False)
+        self.index_progress_bar.setStyleSheet("""
+            QProgressBar { background: #252c3d; border-radius: 4px; border: none; }
+            QProgressBar::chunk { background: #8b5cf6; border-radius: 4px; }
+        """)
+        self.index_progress_bar.hide()
+
         footer.addWidget(self.status_lbl)
+        footer.addStretch()
+        footer.addWidget(self.index_progress_bar)
         left_col.addLayout(footer)
 
         lay.addLayout(left_col, 3)
@@ -870,41 +1165,50 @@ class KaraokeApp(QWidget):
 
         if self.songs_dir != usb_dir:
             self.songs_dir = usb_dir
-            db_path = (usb_dir / ".katoy-karaoke.db") if usb_dir.is_dir() else (usb_dir.parent / ".katoy-karaoke.db")
-            db_loaded = False
-            try:
-                self.db = SongDatabase(db_path)
-                count = self.db.index_songs(self.songs_dir)
-                self.status_lbl.setText(f"Loaded {count} songs from {self.songs_dir.name}")
-                db_loaded = True
-            except Exception as e:
-                if self.db:
-                    try:
-                        self.db.close()
-                    except Exception:
-                        pass
-                    self.db = None
+            if self.db:
+                self.db.close()
+                self.db = None
+            self.start_async_indexing(force=False)
 
-            if not db_loaded:
-                # Fall back to writable location in /tmp for read-only USB drives
-                fallback_dir = Path("/tmp/katoy_karaoke")
-                try:
-                    fallback_dir.mkdir(parents=True, exist_ok=True)
-                    safe_name = re.sub(r'[^a-zA-Z0-9_-]', '_', usb_dir.name)
-                    fallback_db_path = fallback_dir / f".katoy-karaoke-{safe_name}.db"
-                    self.db = SongDatabase(fallback_db_path)
-                    count = self.db.index_songs(self.songs_dir)
-                    self.status_lbl.setText(f"Loaded {count} songs from {self.songs_dir.name} (read-only mode)")
-                except Exception as e:
-                    self.status_lbl.setText(f"Error indexing songs: {e}")
+    def start_async_indexing(self, force=False):
+        if not self.songs_dir:
+            return
 
-            self.soundfont = find_soundfont(self.config.get("SOUNDFONT"), self.songs_dir)
-            self.backgrounds = find_backgrounds(self.config.get("BACKGROUND"), self.songs_dir)
-            self.update_background_image()
+        self.status_lbl.setText("Indexing songs in background...")
+        self.index_progress_bar.setValue(0)
+        self.index_progress_bar.show()
 
-            self.filter_library()
-            if self.stack.currentWidget() == self.no_usb_page:
-                self.stack.setCurrentWidget(self.library_page)
+        self.indexer_worker = SongIndexerWorker(self.songs_dir, self.config, force=force)
+        self.indexer_worker.progress.connect(self.on_indexing_progress)
+        self.indexer_worker.finished.connect(self.on_indexing_finished)
+        self.indexer_worker.start()
+
+    def on_indexing_progress(self, current, total):
+        pct = int((current / total) * 100) if total > 0 else 0
+        self.index_progress_bar.setValue(pct)
+        self.status_lbl.setText(f"Indexing songs: {current}/{total}...")
+
+    def on_indexing_finished(self, count, soundfont, backgrounds, read_only_msg):
+        self.index_progress_bar.hide()
+        db_path = (self.songs_dir / ".katoy-karaoke.db") if self.songs_dir.is_dir() else (self.songs_dir.parent / ".katoy-karaoke.db")
+        if read_only_msg:
+            safe_name = re.sub(r'[^a-zA-Z0-9_-]', '_', self.songs_dir.name)
+            db_path = Path("/tmp/katoy_karaoke") / f".katoy-karaoke-{safe_name}.db"
+
+        try:
+            self.db = SongDatabase(db_path)
+        except Exception as e:
+            print(f"Failed to connect to index DB: {e}")
+
+        self.soundfont = soundfont
+        self.backgrounds = backgrounds
+        self.update_background_image()
+
+        self.status_lbl.setText(f"Loaded {count} songs from {self.songs_dir.name}{read_only_msg}")
+        self.filter_library()
+
+        if self.stack.currentWidget() == self.no_usb_page:
+            self.stack.setCurrentWidget(self.library_page)
 
     def filter_library(self):
         if not self.db:
@@ -928,12 +1232,8 @@ class KaraokeApp(QWidget):
             self.table.selectRow(0)
 
     def on_rescan_pressed(self):
-        if self.db and self.songs_dir:
-            self.status_lbl.setText("Rescanning USB drive...")
-            QApplication.processEvents()
-            count = self.db.index_songs(self.songs_dir, force=True)
-            self.status_lbl.setText(f"Rescan complete. Indexed {count} songs.")
-            self.filter_library()
+        if self.songs_dir:
+            self.start_async_indexing(force=True)
 
     def reserve_selected_song(self):
         curr_row = self.table.currentRow()
@@ -1059,13 +1359,25 @@ class KaraokeApp(QWidget):
             play_file = process_midi_file(fp, tmp_midi, self.pitch_key, self.tempo_multiplier)
 
         audio_driver = self.config.get("AUDIO_DRIVER", "pulseaudio")
-        cmd = ["fluidsynth", "-i", "-a", audio_driver, "-g", "0.8", str(self.soundfont), str(play_file)]
 
-        try:
-            self.fluid_proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        except Exception as e:
-            QMessageBox.critical(self, "FluidSynth Error", f"Failed to start FluidSynth:\n{e}")
-            return
+        started_persistent = False
+        if not self.persistent_synth or self.persistent_synth.soundfont_path != self.soundfont:
+            if self.persistent_synth:
+                self.persistent_synth.cleanup()
+            self.persistent_synth = PersistentFluidSynth(self.soundfont, audio_driver=audio_driver)
+
+        if self.persistent_synth and self.persistent_synth.is_initialized:
+            if self.persistent_synth.load_song(play_file):
+                if self.persistent_synth.play():
+                    started_persistent = True
+
+        if not started_persistent:
+            cmd = ["fluidsynth", "-i", "-a", audio_driver, "-g", "0.8", str(self.soundfont), str(play_file)]
+            try:
+                self.fluid_proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            except Exception as e:
+                QMessageBox.critical(self, "FluidSynth Error", f"Failed to start FluidSynth:\n{e}")
+                return
 
         self.playback_start_time = time.time()
         self.is_playing = True
@@ -1079,22 +1391,24 @@ class KaraokeApp(QWidget):
         self.stack.setCurrentWidget(self.player_page)
 
     def toggle_play_pause(self):
-        if not self.is_playing or not self.fluid_proc:
+        if not self.is_playing:
             return
 
         if self.is_paused:
-            try:
-                self.fluid_proc.send_signal(18)  # SIGCONT
-            except Exception:
-                pass
+            if self.fluid_proc:
+                try:
+                    self.fluid_proc.send_signal(18)  # SIGCONT
+                except Exception:
+                    pass
             self.playback_start_time += (time.time() - self.playback_paused_at)
             self.is_paused = False
             self.pause_btn.setText("⏸ Pause")
         else:
-            try:
-                self.fluid_proc.send_signal(19)  # SIGSTOP
-            except Exception:
-                pass
+            if self.fluid_proc:
+                try:
+                    self.fluid_proc.send_signal(19)  # SIGSTOP
+                except Exception:
+                    pass
             self.playback_paused_at = time.time()
             self.is_paused = True
             self.pause_btn.setText("▶ Resume")
@@ -1124,6 +1438,9 @@ class KaraokeApp(QWidget):
         self.bg_timer.stop()
         self.score_timer.stop()
 
+        if self.persistent_synth:
+            self.persistent_synth.stop()
+
         if self.fluid_proc:
             try:
                 self.fluid_proc.terminate()
@@ -1147,7 +1464,13 @@ class KaraokeApp(QWidget):
         if not self.is_playing:
             return
 
-        if self.fluid_proc and self.fluid_proc.poll() is not None and not self.is_paused:
+        if self.persistent_synth and self.persistent_synth.is_initialized and self.persistent_synth.player:
+            status = self.persistent_synth.get_status()
+            if status == PersistentFluidSynth.FLUID_PLAYER_DONE and not self.is_paused:
+                self.show_pinoy_score_banner()
+                self.play_timer.stop()
+                return
+        elif self.fluid_proc and self.fluid_proc.poll() is not None and not self.is_paused:
             self.show_pinoy_score_banner()
             self.play_timer.stop()
             return

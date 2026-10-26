@@ -160,9 +160,28 @@ def parse_filename_metadata(filepath, code_num):
     return code_str, title, artist
 
 
+def pitch_transpose_midi_file(src_path, dst_path, semi_tones):
+    if semi_tones == 0:
+        return src_path
+    try:
+        mid = mido.MidiFile(src_path)
+        for track in mid.tracks:
+            for msg in track:
+                if msg.type in ('note_on', 'note_off') and hasattr(msg, 'channel') and msg.channel != 9:
+                    msg.note = max(0, min(127, msg.note + semi_tones))
+        mid.save(dst_path)
+        return dst_path
+    except Exception as e:
+        print(f"Pitch transpose error: {e}")
+        return src_path
+
+
 def extract_midi_lyrics_and_duration(filepath):
     try:
-        mid = mido.MidiFile(filepath)
+        try:
+            mid = mido.MidiFile(filepath)
+        except Exception:
+            mid = mido.MidiFile(filepath, encoding='latin1')
     except Exception as e:
         return [], 0.0, Path(filepath).stem, ""
 
@@ -407,15 +426,41 @@ class KaraokeApp(QWidget):
 
         self.stack.setCurrentWidget(self.no_usb_page)
 
-        QShortcut(QKeySequence("Esc"), self, self.on_escape_pressed)
-        QShortcut(QKeySequence("F5"), self, self.on_rescan_pressed)
-        QShortcut(QKeySequence("Space"), self, self.toggle_play_pause)
+        sc_esc = QShortcut(QKeySequence("Esc"), self, self.on_escape_pressed)
+        sc_esc.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
 
-        # Pinoy Karaoke Shortcuts
-        QShortcut(QKeySequence("R"), self, self.reserve_selected_song)
-        QShortcut(QKeySequence("+"), self, lambda: self.adjust_key(1))
-        QShortcut(QKeySequence("-"), self, lambda: self.adjust_key(-1))
-        QShortcut(QKeySequence("N"), self, self.play_next_reserved_song)
+        sc_f5 = QShortcut(QKeySequence("F5"), self, self.on_rescan_pressed)
+        sc_f5.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
+
+        sc_space = QShortcut(QKeySequence("Space"), self, self.on_space_shortcut)
+        sc_space.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
+
+        sc_r = QShortcut(QKeySequence("R"), self, self.on_reserve_shortcut)
+        sc_r.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
+
+        sc_plus = QShortcut(QKeySequence("+"), self, lambda: self.adjust_key(1))
+        sc_plus.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
+
+        sc_minus = QShortcut(QKeySequence("-"), self, lambda: self.adjust_key(-1))
+        sc_minus.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
+
+        sc_n = QShortcut(QKeySequence("N"), self, self.on_next_shortcut)
+        sc_n.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
+
+    def is_search_focused(self):
+        return hasattr(self, 'search_input') and self.search_input.hasFocus()
+
+    def on_space_shortcut(self):
+        if not self.is_search_focused():
+            self.toggle_play_pause()
+
+    def on_reserve_shortcut(self):
+        if not self.is_search_focused():
+            self.reserve_selected_song()
+
+    def on_next_shortcut(self):
+        if not self.is_search_focused():
+            self.play_next_reserved_song()
 
     def create_no_usb_page(self):
         w = QWidget()
@@ -890,8 +935,13 @@ class KaraokeApp(QWidget):
         if m_artist and artist == "Unknown Artist":
             self.p_artist_lbl.setText(m_artist)
 
+        play_file = fp
+        if self.pitch_key != 0:
+            tmp_midi = Path("/tmp/katoy_transposed.mid")
+            play_file = pitch_transpose_midi_file(fp, tmp_midi, self.pitch_key)
+
         audio_driver = self.config.get("AUDIO_DRIVER", "pulseaudio")
-        cmd = ["fluidsynth", "-i", "-a", audio_driver, "-g", "0.8", str(self.soundfont), str(fp)]
+        cmd = ["fluidsynth", "-i", "-a", audio_driver, "-g", "0.8", str(self.soundfont), str(play_file)]
 
         try:
             self.fluid_proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)

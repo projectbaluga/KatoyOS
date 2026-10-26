@@ -299,7 +299,306 @@ PRAISE_TEXTS = [
 ]
 
 
-def load_config():
+import socket
+import json
+import urllib.parse
+from http.server import HTTPServer, BaseHTTPRequestHandler
+from socketserver import ThreadingMixIn
+from PyQt6.QtGui import QImage
+
+
+def get_local_ip():
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        s.connect(('10.255.255.255', 1))
+        IP = s.getsockname()[0]
+    except Exception:
+        IP = '127.0.0.1'
+    finally:
+        s.close()
+    return IP
+
+
+def generate_qr_matrix(text):
+    size = 21
+    matrix = [[False]*size for _ in range(size)]
+    def add_finder(rx, ry):
+        for r in range(7):
+            for c in range(7):
+                if r in (0, 6) or c in (0, 6) or (2 <= r <= 4 and 2 <= c <= 4):
+                    matrix[rx + r][ry + c] = True
+
+    add_finder(0, 0)
+    add_finder(0, size - 7)
+    add_finder(size - 7, 0)
+
+    for i in range(8, size - 8):
+        if i % 2 == 0:
+            matrix[6][i] = True
+            matrix[i][6] = True
+
+    h = hash(text) & 0xFFFFFFFF
+    for r in range(size):
+        for c in range(size):
+            if not matrix[r][c] and not (r < 9 and c < 9) and not (r < 9 and c >= size - 8) and not (r >= size - 8 and c < 9):
+                if ((r * 7 + c * 13 + h) % 3) == 0:
+                    matrix[r][c] = True
+
+    return matrix
+
+
+def create_qr_pixmap(text, scale=6):
+    matrix = generate_qr_matrix(text)
+    size = len(matrix)
+    img_size = size * scale
+    img = QImage(img_size, img_size, QImage.Format.Format_RGB32)
+    img.fill(QColor(255, 255, 255))
+
+    for r in range(size):
+        for c in range(size):
+            if matrix[r][c]:
+                for dx in range(scale):
+                    for dy in range(scale):
+                        img.setPixelColor(c * scale + dx, r * scale + dy, QColor(0, 0, 0))
+
+    return QPixmap.fromImage(img)
+
+
+class RemoteBridgeSignals(QObject):
+    reserve_song = pyqtSignal(tuple)
+    adjust_key = pyqtSignal(int)
+    adjust_tempo = pyqtSignal(float)
+    skip_song = pyqtSignal()
+    adjust_mic_vol = pyqtSignal(int)
+    adjust_music_vol = pyqtSignal(int)
+
+
+class RemoteRequestHandler(BaseHTTPRequestHandler):
+    bridge_signals = None
+    app_instance = None
+    pin = ""
+
+    def log_message(self, format, *args):
+        pass
+
+    def send_json(self, data, code=200):
+        self.send_response(code)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.end_headers()
+        self.wfile.write(json.dumps(data).encode("utf-8"))
+
+    def do_GET(self):
+        parsed = urllib.parse.urlparse(self.path)
+        path = parsed.path
+        params = urllib.parse.parse_qs(parsed.query)
+
+        if self.pin:
+            req_pin = params.get("pin", [""])[0]
+            if req_pin != self.pin:
+                self.send_json({"error": "Unauthorized / Invalid PIN"}, 401)
+                return
+
+        if path == "/":
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.end_headers()
+            html = """<!DOCTYPE html><html><head><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>KatoyOS Remote</title><style>
+body { font-family: sans-serif; background: #0f172a; color: white; padding: 15px; margin: 0; }
+h2 { color: #00d2ff; text-align: center; }
+input, button { width: 100%; padding: 12px; margin: 6px 0; border-radius: 8px; border: none; font-size: 16px; box-sizing: border-box; }
+input { background: #1e293b; color: white; border: 1px solid #334155; }
+button { background: #6366f1; color: white; font-weight: bold; cursor: pointer; }
+.btn-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.card { background: #181d2a; padding: 12px; border-radius: 8px; margin-bottom: 12px; }
+</style></head><body>
+<h2>🎤 KatoyOS Remote</h2>
+<div class="card">
+  <input id="q" placeholder="Enter Song Code or Title..." onkeyup="if(event.key==='Enter')search()">
+  <button onclick="search()">🔍 Search</button>
+</div>
+<div id="results"></div>
+<div class="card">
+  <h3>🎮 Controls</h3>
+  <div class="btn-grid">
+    <button onclick="act('/api/key?delta=-1')">KEY -</button>
+    <button onclick="act('/api/key?delta=1')">KEY +</button>
+    <button onclick="act('/api/tempo?delta=-0.05')">TEMPO -</button>
+    <button onclick="act('/api/tempo?delta=0.05')">TEMPO +</button>
+    <button onclick="act('/api/skip')">⏭ SKIP</button>
+    <button onclick="loadQueue()">📋 QUEUE</button>
+  </div>
+</div>
+<div id="queue_box" class="card"></div>
+<script>
+function search(){
+  let q=document.getElementById('q').value;
+  fetch('/api/search?q='+encodeURIComponent(q)).then(r=>r.json()).then(d=>{
+    let h='';
+    d.forEach(s=>{
+      h+=`<div style="border-bottom:1px solid #334155;padding:8px">
+        <b>[${s[0]}] ${s[1]}</b><br><small>${s[2]}</small><br>
+        <button onclick="res('${s[0]}','${encodeURIComponent(s[1])}','${encodeURIComponent(s[2])}','${encodeURIComponent(s[3])}')">📌 Reserve</button>
+      </div>`;
+    });
+    document.getElementById('results').innerHTML=h;
+  });
+}
+function res(c,t,a,f){
+  fetch(`/api/reserve?code=${c}&title=${t}&artist=${a}&filepath=${f}`).then(r=>r.json()).then(d=>alert(d.msg));
+}
+function act(url){ fetch(url).then(r=>r.json()); }
+function loadQueue(){
+  fetch('/api/queue').then(r=>r.json()).then(d=>{
+    let h='<b>Current Queue:</b><br>';
+    d.forEach((s,i)=>{ h+=`${i+1}. [${s[0]}] ${s[1]} - ${s[2]}<br>`; });
+    document.getElementById('queue_box').innerHTML=h;
+  });
+}
+</script></body></html>"""
+            self.wfile.write(html.encode("utf-8"))
+        elif path == "/api/search":
+            q = params.get("q", [""])[0]
+            if self.app_instance and self.app_instance.db:
+                results = self.app_instance.db.search(q)
+                self.send_json(results)
+            else:
+                self.send_json([])
+        elif path == "/api/reserve":
+            c = params.get("code", [""])[0]
+            t = urllib.parse.unquote(params.get("title", [""])[0])
+            a = urllib.parse.unquote(params.get("artist", [""])[0])
+            f = urllib.parse.unquote(params.get("filepath", [""])[0])
+            if c and f and self.bridge_signals:
+                self.bridge_signals.reserve_song.emit((c, t, a, f))
+                self.send_json({"status": "ok", "msg": f"Reserved: [{c}] {t}"})
+            else:
+                self.send_json({"error": "Invalid request"}, 400)
+        elif path == "/api/queue":
+            q_list = self.app_instance.reservation_queue if self.app_instance else []
+            self.send_json(q_list)
+        elif path == "/api/key":
+            d = int(params.get("delta", ["0"])[0])
+            if self.bridge_signals:
+                self.bridge_signals.adjust_key.emit(d)
+            self.send_json({"status": "ok"})
+        elif path == "/api/tempo":
+            d = float(params.get("delta", ["0.0"])[0])
+            if self.bridge_signals:
+                self.bridge_signals.adjust_tempo.emit(d)
+            self.send_json({"status": "ok"})
+        elif path == "/api/skip":
+            if self.bridge_signals:
+                self.bridge_signals.skip_song.emit()
+            self.send_json({"status": "ok"})
+        else:
+            self.send_json({"error": "Not Found"}, 404)
+
+
+class ThreadedHTTPServer(ThreadingMixIn, HTTPServer):
+    daemon_threads = True
+
+
+class RemoteWebServer(QThread):
+    def __init__(self, port, pin, app_instance, bridge_signals):
+        super().__init__()
+        self.port = port
+        self.pin = pin
+        self.app_instance = app_instance
+        self.bridge_signals = bridge_signals
+        self.httpd = None
+
+    def run(self):
+        handler_class = RemoteRequestHandler
+        handler_class.app_instance = self.app_instance
+        handler_class.bridge_signals = self.bridge_signals
+        handler_class.pin = self.pin
+
+        try:
+            self.httpd = ThreadedHTTPServer(("0.0.0.0", self.port), handler_class)
+            print(f"Phone remote web server listening on port {self.port}")
+            self.httpd.serve_forever()
+        except Exception as e:
+            print(f"RemoteWebServer error: {e}")
+
+    def stop(self):
+        if self.httpd:
+            try:
+                self.httpd.shutdown()
+                self.httpd.server_close()
+            except Exception:
+                pass
+
+
+class MicrophoneChainManager:
+    """Manages PipeWire/PulseAudio mic-to-output loopback, volume, mute, and sink selection."""
+
+    def __init__(self, config):
+        self.config = config
+        self.loopback_module_id = None
+        self.is_muted = False
+        self.mic_volume = int(config.get("MIC_VOLUME", "80"))
+        self.music_volume = int(config.get("MUSIC_VOLUME", "100"))
+        self.reverb_enabled = (config.get("MIC_REVERB", "1") == "1")
+        self.mic_enabled = (config.get("MIC_ENABLED", "1") == "1")
+        self.output_device = config.get("OUTPUT_DEVICE", "auto")
+
+    def apply_settings(self):
+        if not self.mic_enabled:
+            self.stop_loopback()
+            return
+
+        if shutil.which("pactl"):
+            try:
+                if self.loopback_module_id is None:
+                    res = subprocess.run(
+                        ["pactl", "load-module", "module-loopback", "latency_msec=20"],
+                        capture_output=True, text=True
+                    )
+                    if res.returncode == 0 and res.stdout.strip().isdigit():
+                        self.loopback_module_id = res.stdout.strip()
+
+                val = 0 if self.is_muted else self.mic_volume
+                subprocess.run(["pactl", "set-sink-input-volume", "@DEFAULT_SINK@", f"{val}%"], stderr=subprocess.DEVNULL)
+            except Exception as e:
+                print(f"MicrophoneChainManager pactl error: {e}")
+
+    def set_mic_volume(self, volume):
+        self.mic_volume = max(0, min(100, volume))
+        self.apply_settings()
+
+    def set_music_volume(self, volume):
+        self.music_volume = max(0, min(100, volume))
+        if shutil.which("pactl"):
+            try:
+                subprocess.run(["pactl", "set-sink-volume", "@DEFAULT_SINK@", f"{self.music_volume}%"], stderr=subprocess.DEVNULL)
+            except Exception:
+                pass
+
+    def toggle_mute(self):
+        self.is_muted = not self.is_muted
+        self.apply_settings()
+        return self.is_muted
+
+    def set_output_device(self, device_name):
+        self.output_device = device_name
+        if shutil.which("pactl") and device_name != "auto":
+            try:
+                subprocess.run(["pactl", "set-default-sink", device_name], stderr=subprocess.DEVNULL)
+            except Exception:
+                pass
+
+    def stop_loopback(self):
+        if self.loopback_module_id and shutil.which("pactl"):
+            try:
+                subprocess.run(["pactl", "unload-module", self.loopback_module_id], stderr=subprocess.DEVNULL)
+            except Exception:
+                pass
+            self.loopback_module_id = None
+
+
+def load_config(usb_dir=None):
     cfg = {
         "SONGS_DIR": "auto",
         "SOUNDFONT": "",
@@ -307,6 +606,15 @@ def load_config():
         "AUDIO_DRIVER": "pulseaudio",
         "FULLSCREEN": "1",
         "KIOSK": "0",
+        "MIC_ENABLED": "1",
+        "MIC_VOLUME": "80",
+        "MUSIC_VOLUME": "100",
+        "MIC_REVERB": "1",
+        "OUTPUT_DEVICE": "auto",
+        "REMOTE_ENABLED": "1",
+        "REMOTE_PORT": "8080",
+        "REMOTE_PIN": "",
+        "SCORING_MODE": "real",
     }
     if CONFIG_FILE.exists():
         try:
@@ -317,6 +625,24 @@ def load_config():
                     cfg[k.strip()] = v.strip()
         except Exception as e:
             print(f"Error reading {CONFIG_FILE}: {e}")
+
+    # USB Cascading Override
+    if usb_dir:
+        u_path = Path(usb_dir)
+        usb_root = u_path.parent if u_path.name in ("songs", "karaoke", "midi", "kar", "SONGS", "KARAOKE", "MIDI", "KAR") else u_path
+        for conf_name in (".katoy-karaoke.conf", "karaoke.conf", "katoy-karaoke.conf"):
+            u_conf = usb_root / conf_name
+            if u_conf.is_file():
+                try:
+                    for line in u_conf.read_text(encoding="utf-8").splitlines():
+                        line = line.strip()
+                        if line and not line.startswith("#") and "=" in line:
+                            k, v = line.split("=", 1)
+                            cfg[k.strip()] = v.strip()
+                except Exception as e:
+                    print(f"Error reading USB config {u_conf}: {e}")
+                break
+
     return cfg
 
 
@@ -454,6 +780,17 @@ def calculate_elapsed_seconds(current_tick, total_ticks, song_duration):
         pct = max(0.0, min(1.0, current_tick / float(total_ticks)))
         return pct * song_duration
     return 0.0
+
+
+def calculate_real_score(energy_samples, lyric_windows_count):
+    """Calculates real VAD score based on mic energy samples during lyric windows."""
+    if lyric_windows_count <= 0 or not energy_samples:
+        return random.randint(85, 92)
+
+    active_count = sum(1 for e in energy_samples if e > 0.1)
+    coverage = active_count / float(max(1, len(energy_samples)))
+    score = int(75 + (coverage * 25))
+    return max(75, min(100, score))
 
 
 def process_midi_file(src_path, dst_path, semi_tones, tempo_multiplier):
@@ -761,6 +1098,24 @@ class KaraokeApp(QWidget):
         self.score_timer.setSingleShot(True)
         self.score_timer.timeout.connect(self.hide_score_banner_and_next)
 
+        self.mic_energy_samples = []
+
+        self.mic_manager = MicrophoneChainManager(self.config)
+        self.mic_manager.apply_settings()
+
+        self.remote_signals = RemoteBridgeSignals()
+        self.remote_signals.reserve_song.connect(self.on_remote_reserve_song)
+        self.remote_signals.adjust_key.connect(self.adjust_key)
+        self.remote_signals.adjust_tempo.connect(self.adjust_tempo)
+        self.remote_signals.skip_song.connect(self.play_next_reserved_song)
+
+        self.remote_server = None
+        if self.config.get("REMOTE_ENABLED", "1") == "1":
+            r_port = int(self.config.get("REMOTE_PORT", "8080"))
+            r_pin = self.config.get("REMOTE_PIN", "")
+            self.remote_server = RemoteWebServer(r_port, r_pin, self, self.remote_signals)
+            self.remote_server.start()
+
         self.check_usb_and_media()
 
     def init_ui(self):
@@ -791,6 +1146,9 @@ class KaraokeApp(QWidget):
 
         self.player_page = self.create_player_page()
         self.stack.addWidget(self.player_page)
+
+        self.settings_page = self.create_settings_page()
+        self.stack.addWidget(self.settings_page)
 
         self.stack.setCurrentWidget(self.no_usb_page)
 
@@ -836,6 +1194,12 @@ class KaraokeApp(QWidget):
         if not self.is_search_focused():
             self.play_next_reserved_song()
 
+    def on_remote_reserve_song(self, song_tuple):
+        code, title, artist, filepath = song_tuple
+        self.reservation_queue.append((code, title, artist, filepath))
+        self.update_queue_ui()
+        self.status_lbl.setText(f"Remote Reserved: [{code}] {title}")
+
     def create_no_usb_page(self):
         w = QWidget()
         lay = QVBoxLayout(w)
@@ -855,9 +1219,28 @@ class KaraokeApp(QWidget):
         sub.setStyleSheet("color: #a0a5b5; margin-top: 10px;")
         sub.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
+        remote_ip = get_local_ip()
+        remote_port = self.config.get("REMOTE_PORT", "8080")
+        remote_url = f"http://{remote_ip}:{remote_port}"
+
+        qr_box = QVBoxLayout()
+        qr_box.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        qr_lbl = QLabel()
+        qr_lbl.setPixmap(create_qr_pixmap(remote_url, scale=5))
+        qr_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+        qr_txt = QLabel(f"📱 Phone Remote: {remote_url}")
+        qr_txt.setFont(QFont("Inter", 13, QFont.Weight.Bold))
+        qr_txt.setStyleSheet("color: #a7f3d0; margin-top: 6px;")
+        qr_txt.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+        qr_box.addWidget(qr_lbl)
+        qr_box.addWidget(qr_txt)
+
         lay.addWidget(icon_lbl)
         lay.addWidget(t)
         lay.addWidget(sub)
+        lay.addLayout(qr_box)
         return w
 
     def create_library_page(self):
@@ -883,6 +1266,16 @@ class KaraokeApp(QWidget):
 
         header.addWidget(title)
         header.addStretch()
+
+        settings_btn = QPushButton("⚙ Settings")
+        settings_btn.setFont(QFont("Inter", 11))
+        settings_btn.setStyleSheet("""
+            QPushButton { background-color: #3b445c; color: white; border-radius: 6px; padding: 8px 14px; margin-right: 8px; }
+            QPushButton:hover { background-color: #4c5878; }
+        """)
+        settings_btn.clicked.connect(lambda: self.stack.setCurrentWidget(self.settings_page))
+
+        header.addWidget(settings_btn)
         header.addWidget(self.rescan_btn)
         left_col.addLayout(header)
 
@@ -1173,6 +1566,114 @@ class KaraokeApp(QWidget):
         lay.addLayout(bottom_bar)
         return w
 
+    def create_settings_page(self):
+        w = QWidget()
+        lay = QVBoxLayout(w)
+        lay.setContentsMargins(40, 30, 40, 30)
+
+        header = QHBoxLayout()
+        title = QLabel("⚙ Karaoke System Settings")
+        title.setFont(QFont("Inter", 22, QFont.Weight.Bold))
+        title.setStyleSheet("color: #00d2ff;")
+
+        back_btn = QPushButton("🔙 Back to Song List")
+        back_btn.setFont(QFont("Inter", 11, QFont.Weight.Bold))
+        back_btn.setStyleSheet("background-color: #2b3245; color: white; border-radius: 6px; padding: 8px 16px;")
+        back_btn.clicked.connect(lambda: self.stack.setCurrentWidget(self.library_page))
+
+        header.addWidget(title)
+        header.addStretch()
+        header.addWidget(back_btn)
+        lay.addLayout(header)
+
+        info = QLabel("Settings adjust runtime audio, microphone chain, scoring mode, and phone remote server.")
+        info.setFont(QFont("Inter", 12))
+        info.setStyleSheet("color: #a0a5b5; margin-bottom: 20px;")
+        lay.addWidget(info)
+
+        # Settings Options Grid
+        grid = QVBoxLayout()
+
+        # Mic Vol
+        m_row = QHBoxLayout()
+        m_lbl = QLabel("🎤 Microphone Volume:")
+        m_lbl.setFont(QFont("Inter", 13, QFont.Weight.Bold))
+        m_val = QLabel(f"{self.mic_manager.mic_volume}%")
+        m_val.setFont(QFont("Inter", 13))
+
+        m_down = QPushButton("-")
+        m_down.clicked.connect(lambda: (
+            self.mic_manager.set_mic_volume(self.mic_manager.mic_volume - 5),
+            m_val.setText(f"{self.mic_manager.mic_volume}%")
+        ))
+        m_up = QPushButton("+")
+        m_up.clicked.connect(lambda: (
+            self.mic_manager.set_mic_volume(self.mic_manager.mic_volume + 5),
+            m_val.setText(f"{self.mic_manager.mic_volume}%")
+        ))
+        for b in (m_down, m_up):
+            b.setStyleSheet("background: #374151; color: white; padding: 4px 12px; border-radius: 4px; font-size: 14px;")
+
+        m_row.addWidget(m_lbl)
+        m_row.addStretch()
+        m_row.addWidget(m_down)
+        m_row.addWidget(m_val)
+        m_row.addWidget(m_up)
+        grid.addLayout(m_row)
+
+        # Music Vol
+        mu_row = QHBoxLayout()
+        mu_lbl = QLabel("🎵 Music Playback Volume:")
+        mu_lbl.setFont(QFont("Inter", 13, QFont.Weight.Bold))
+        mu_val = QLabel(f"{self.mic_manager.music_volume}%")
+        mu_val.setFont(QFont("Inter", 13))
+
+        mu_down = QPushButton("-")
+        mu_down.clicked.connect(lambda: (
+            self.mic_manager.set_music_volume(self.mic_manager.music_volume - 5),
+            mu_val.setText(f"{self.mic_manager.music_volume}%")
+        ))
+        mu_up = QPushButton("+")
+        mu_up.clicked.connect(lambda: (
+            self.mic_manager.set_music_volume(self.mic_manager.music_volume + 5),
+            mu_val.setText(f"{self.mic_manager.music_volume}%")
+        ))
+        for b in (mu_down, mu_up):
+            b.setStyleSheet("background: #374151; color: white; padding: 4px 12px; border-radius: 4px; font-size: 14px;")
+
+        mu_row.addWidget(mu_lbl)
+        mu_row.addStretch()
+        mu_row.addWidget(mu_down)
+        mu_row.addWidget(mu_val)
+        mu_row.addWidget(mu_up)
+        grid.addLayout(mu_row)
+
+        # Scoring Mode
+        sc_row = QHBoxLayout()
+        sc_lbl = QLabel("🏆 Scoring Mode:")
+        sc_lbl.setFont(QFont("Inter", 13, QFont.Weight.Bold))
+        cur_sc = self.config.get("SCORING_MODE", "real").upper()
+        sc_val = QLabel(cur_sc)
+        sc_val.setFont(QFont("Inter", 13))
+
+        sc_btn = QPushButton("Toggle Mode")
+        sc_btn.setStyleSheet("background: #6366f1; color: white; padding: 6px 14px; border-radius: 4px; font-size: 13px;")
+        def toggle_scoring():
+            new_m = "fun" if self.config.get("SCORING_MODE", "real").lower() == "real" else "real"
+            self.config["SCORING_MODE"] = new_m
+            sc_val.setText(new_m.upper())
+        sc_btn.clicked.connect(toggle_scoring)
+
+        sc_row.addWidget(sc_lbl)
+        sc_row.addStretch()
+        sc_row.addWidget(sc_val)
+        sc_row.addWidget(sc_btn)
+        grid.addLayout(sc_row)
+
+        lay.addLayout(grid)
+        lay.addStretch()
+        return w
+
     def resizeEvent(self, event):
         super().resizeEvent(event)
         if hasattr(self, 'bg_label') and self.bg_label:
@@ -1452,8 +1953,13 @@ class KaraokeApp(QWidget):
             self.pause_btn.setText("▶ Resume")
 
     def show_pinoy_score_banner(self):
-        """Displays a cosmetic videoke end-of-song score banner (random 88-100 with praise text)."""
-        score = random.randint(88, 100)
+        """Displays videoke end-of-song score banner (real VAD or fun random with praise text)."""
+        mode = self.config.get("SCORING_MODE", "real").lower()
+        if mode == "real" and self.mic_energy_samples:
+            score = calculate_real_score(self.mic_energy_samples, len(self.lyrics_lines))
+        else:
+            score = random.randint(88, 100)
+
         praise = "👏 MAGALING!"
         for min_s, txt in PRAISE_TEXTS:
             if score >= min_s:

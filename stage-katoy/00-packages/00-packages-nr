@@ -28,9 +28,6 @@ udisks2
 gvfs
 gvfs-fuse
 dbus-user-session
-dbus-x11
-accountsservice
-x11-xserver-utils
 xdg-user-dirs
 xdg-utils
 libnotify-bin
@@ -42,5 +39,6 @@ pavucontrol-qt
 # boot splash + Welcome app runtime
 plymouth
 python3-pyqt6
+python3-pyqt6.qtwebengine
 x11-xkb-utils
 xkb-data

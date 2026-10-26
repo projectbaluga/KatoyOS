@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Simple web browser for KatoyOS with search and basic internet browsing."""
+"""Simple web browser for KatoyOS with search fallback and basic internet browsing."""
 import sys
 import urllib.parse
 

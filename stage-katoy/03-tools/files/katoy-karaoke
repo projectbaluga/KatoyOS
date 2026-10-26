@@ -101,6 +101,8 @@ class PersistentFluidSynth:
         self.player = None
         self.sfont_id = -1
         self.is_initialized = False
+        self.saved_tick = 0
+        self.is_paused = False
 
         self._init_library()
 
@@ -148,6 +150,10 @@ class PersistentFluidSynth:
 
             self.lib.fluid_player_get_total_ticks.argtypes = [ctypes.c_void_p]
             self.lib.fluid_player_get_total_ticks.restype = ctypes.c_int
+
+            if hasattr(self.lib, 'fluid_player_seek'):
+                self.lib.fluid_player_seek.argtypes = [ctypes.c_void_p, ctypes.c_int]
+                self.lib.fluid_player_seek.restype = ctypes.c_int
 
             self.lib.delete_fluid_player.argtypes = [ctypes.c_void_p]
             self.lib.delete_fluid_audio_driver.argtypes = [ctypes.c_void_p]
@@ -210,10 +216,30 @@ class PersistentFluidSynth:
 
     def play(self):
         if self.player:
+            self.is_paused = False
             return self.lib.fluid_player_play(self.player) == 0
         return False
 
+    def pause(self):
+        if self.player and not self.is_paused:
+            self.saved_tick = self.get_current_tick()
+            self.lib.fluid_player_stop(self.player)
+            if hasattr(self.lib, 'fluid_synth_all_notes_off') and self.synth:
+                for ch in range(16):
+                    self.lib.fluid_synth_all_notes_off(self.synth, ch)
+            self.is_paused = True
+
+    def resume(self):
+        if self.player and self.is_paused:
+            res = self.lib.fluid_player_play(self.player)
+            if hasattr(self.lib, 'fluid_player_seek'):
+                self.lib.fluid_player_seek(self.player, self.saved_tick)
+            self.is_paused = False
+            return res == 0
+        return False
+
     def stop(self):
+        self.is_paused = False
         if self.player:
             try:
                 self.lib.fluid_player_stop(self.player)
@@ -420,6 +446,14 @@ def load_midifile_robust(filepath):
         except Exception:
             continue
     return mido.MidiFile(filepath, clip=True)
+
+
+def calculate_elapsed_seconds(current_tick, total_ticks, song_duration):
+    """Calculates elapsed audio position in seconds from FluidSynth ticks."""
+    if total_ticks > 0 and current_tick >= 0:
+        pct = max(0.0, min(1.0, current_tick / float(total_ticks)))
+        return pct * song_duration
+    return 0.0
 
 
 def process_midi_file(src_path, dst_path, semi_tones, tempo_multiplier):
@@ -1395,7 +1429,9 @@ class KaraokeApp(QWidget):
             return
 
         if self.is_paused:
-            if self.fluid_proc:
+            if self.persistent_synth and self.persistent_synth.is_initialized and not self.fluid_proc:
+                self.persistent_synth.resume()
+            elif self.fluid_proc:
                 try:
                     self.fluid_proc.send_signal(18)  # SIGCONT
                 except Exception:
@@ -1404,7 +1440,9 @@ class KaraokeApp(QWidget):
             self.is_paused = False
             self.pause_btn.setText("⏸ Pause")
         else:
-            if self.fluid_proc:
+            if self.persistent_synth and self.persistent_synth.is_initialized and not self.fluid_proc:
+                self.persistent_synth.pause()
+            elif self.fluid_proc:
                 try:
                     self.fluid_proc.send_signal(19)  # SIGSTOP
                 except Exception:
@@ -1464,7 +1502,14 @@ class KaraokeApp(QWidget):
         if not self.is_playing:
             return
 
-        if self.persistent_synth and self.persistent_synth.is_initialized and self.persistent_synth.player:
+        using_persistent = (
+            self.persistent_synth and
+            self.persistent_synth.is_initialized and
+            self.persistent_synth.player and
+            not self.fluid_proc
+        )
+
+        if using_persistent:
             status = self.persistent_synth.get_status()
             if status == PersistentFluidSynth.FLUID_PLAYER_DONE and not self.is_paused:
                 self.show_pinoy_score_banner()
@@ -1475,10 +1520,18 @@ class KaraokeApp(QWidget):
             self.play_timer.stop()
             return
 
-        if self.is_paused:
-            elapsed = self.playback_paused_at - self.playback_start_time
+        if using_persistent:
+            if self.is_paused:
+                cur_tick = self.persistent_synth.saved_tick
+            else:
+                cur_tick = self.persistent_synth.get_current_tick()
+            tot_ticks = self.persistent_synth.get_total_ticks()
+            elapsed = calculate_elapsed_seconds(cur_tick, tot_ticks, self.song_duration)
         else:
-            elapsed = time.time() - self.playback_start_time
+            if self.is_paused:
+                elapsed = self.playback_paused_at - self.playback_start_time
+            else:
+                elapsed = time.time() - self.playback_start_time
 
         elapsed = max(0.0, elapsed)
         dur = max(1.0, self.song_duration)

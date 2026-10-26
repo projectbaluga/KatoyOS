@@ -1,0 +1,84 @@
+#!/usr/bin/env python3
+"""Simple web browser for KatoyOS with search fallback and basic internet browsing."""
+import sys
+import urllib.parse
+
+from PyQt6.QtCore import QUrl
+from PyQt6.QtGui import QIcon
+from PyQt6.QtWidgets import QApplication, QHBoxLayout, QLineEdit, QMainWindow, QPushButton, QVBoxLayout, QWidget
+from PyQt6.QtWebEngineWidgets import QWebEngineView
+
+
+class BrowserWindow(QMainWindow):
+    def __init__(self):
+        super().__init__()
+        self.setWindowTitle("Katoy Browser")
+        self.resize(1200, 800)
+        self.setWindowIcon(QIcon.fromTheme("web-browser"))
+
+        self.back_btn = QPushButton("Back")
+        self.forward_btn = QPushButton("Forward")
+        self.reload_btn = QPushButton("Reload")
+        self.home_btn = QPushButton("Home")
+        self.url_bar = QLineEdit()
+        self.url_bar.returnPressed.connect(self.load_from_bar)
+
+        self.back_btn.clicked.connect(self.view.back)
+        self.forward_btn.clicked.connect(self.view.forward)
+        self.reload_btn.clicked.connect(self.view.reload)
+        self.home_btn.clicked.connect(lambda: self.load("https://duckduckgo.com/"))
+
+        nav = QHBoxLayout()
+        nav.addWidget(self.back_btn)
+        nav.addWidget(self.forward_btn)
+        nav.addWidget(self.reload_btn)
+        nav.addWidget(self.home_btn)
+        nav.addWidget(self.url_bar, 1)
+
+        central = QWidget()
+        layout = QVBoxLayout(central)
+        layout.addLayout(nav)
+        layout.addWidget(self.view)
+        self.setCentralWidget(central)
+
+        self.view.urlChanged.connect(self.update_url_bar)
+        self.load("https://duckduckgo.com/")
+
+    @property
+    def view(self):
+        if not hasattr(self, "_view"):
+            self._view = QWebEngineView()
+        return self._view
+
+    def normalize_url(self, text):
+        value = text.strip()
+        if not value:
+            return None
+
+        if value.startswith(("http://", "https://")):
+            return value
+
+        if "." in value or "/" in value:
+            return "https://" + value if not value.startswith("http") else value
+
+        return "https://duckduckgo.com/?q=" + urllib.parse.quote(value)
+
+    def load_from_bar(self):
+        self.load(self.url_bar.text())
+
+    def load(self, value):
+        url = self.normalize_url(value)
+        if not url:
+            return
+        self.view.setUrl(QUrl(url))
+        self.url_bar.setText(url)
+
+    def update_url_bar(self, url):
+        self.url_bar.setText(url.toString())
+
+
+if __name__ == "__main__":
+    app = QApplication(sys.argv)
+    window = BrowserWindow()
+    window.show()
+    sys.exit(app.exec())

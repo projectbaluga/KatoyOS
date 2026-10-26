@@ -1,24 +1,10 @@
-# X11 + display manager
+# X11 Appliance Environment
 xserver-xorg-core
 xserver-xorg-input-libinput
 xinit
-lightdm
-lightdm-gtk-greeter
 openbox
-# LXQt desktop
-lxqt-core
-lxqt-session
-lxqt-panel
-lxqt-config
-lxqt-themes
-lxqt-policykit
-lxqt-notificationd
-lxqt-powermanagement
-lxqt-qtplugin
-lxqt-runner
-pcmanfm-qt
+udiskie
 qterminal
-nm-tray
 # system services
 network-manager
 polkitd
@@ -42,5 +28,6 @@ alsa-utils
 # boot splash + Welcome app runtime
 plymouth
 python3-pyqt6
+python3-qrcode
 x11-xkb-utils
 xkb-data

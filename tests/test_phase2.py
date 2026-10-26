@@ -48,11 +48,12 @@ def test_calculate_real_score():
 
 def test_generate_qr_matrix():
     qr_fn = kk["generate_qr_matrix"]
-    matrix = qr_fn("http://192.168.1.100:8080")
+    url = "http://192.168.1.100:8080"
+    matrix = qr_fn(url)
 
-    assert len(matrix) == 21
-    assert len(matrix[0]) == 21
-    # Check finder patterns
+    assert len(matrix) >= 21
+    assert len(matrix[0]) >= 21
+    # Check finder patterns (top-left 7x7)
     assert matrix[0][0] is True
     assert matrix[0][6] is True
     assert matrix[6][0] is True

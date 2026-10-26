@@ -15,6 +15,7 @@ import os
 import re
 import sys
 import time
+import shutil
 import sqlite3
 import random
 import subprocess
@@ -320,31 +321,38 @@ def get_local_ip():
 
 
 def generate_qr_matrix(text):
-    size = 21
-    matrix = [[False]*size for _ in range(size)]
-    def add_finder(rx, ry):
-        for r in range(7):
-            for c in range(7):
-                if r in (0, 6) or c in (0, 6) or (2 <= r <= 4 and 2 <= c <= 4):
-                    matrix[rx + r][ry + c] = True
+    try:
+        import qrcode
+        qr = qrcode.QRCode(version=1, box_size=1, border=0)
+        qr.add_data(text)
+        qr.make(fit=True)
+        return qr.get_matrix()
+    except Exception:
+        size = 21
+        matrix = [[False]*size for _ in range(size)]
+        def add_finder(rx, ry):
+            for r in range(7):
+                for c in range(7):
+                    if r in (0, 6) or c in (0, 6) or (2 <= r <= 4 and 2 <= c <= 4):
+                        matrix[rx + r][ry + c] = True
 
-    add_finder(0, 0)
-    add_finder(0, size - 7)
-    add_finder(size - 7, 0)
+        add_finder(0, 0)
+        add_finder(0, size - 7)
+        add_finder(size - 7, 0)
 
-    for i in range(8, size - 8):
-        if i % 2 == 0:
-            matrix[6][i] = True
-            matrix[i][6] = True
+        for i in range(8, size - 8):
+            if i % 2 == 0:
+                matrix[6][i] = True
+                matrix[i][6] = True
 
-    h = hash(text) & 0xFFFFFFFF
-    for r in range(size):
-        for c in range(size):
-            if not matrix[r][c] and not (r < 9 and c < 9) and not (r < 9 and c >= size - 8) and not (r >= size - 8 and c < 9):
-                if ((r * 7 + c * 13 + h) % 3) == 0:
-                    matrix[r][c] = True
+        h = hash(text) & 0xFFFFFFFF
+        for r in range(size):
+            for c in range(size):
+                if not matrix[r][c] and not (r < 9 and c < 9) and not (r < 9 and c >= size - 8) and not (r >= size - 8 and c < 9):
+                    if ((r * 7 + c * 13 + h) % 3) == 0:
+                        matrix[r][c] = True
 
-    return matrix
+        return matrix
 
 
 def create_qr_pixmap(text, scale=6):
@@ -560,7 +568,8 @@ class MicrophoneChainManager:
                         self.loopback_module_id = res.stdout.strip()
 
                 val = 0 if self.is_muted else self.mic_volume
-                subprocess.run(["pactl", "set-sink-input-volume", "@DEFAULT_SINK@", f"{val}%"], stderr=subprocess.DEVNULL)
+                subprocess.run(["pactl", "set-source-volume", "@DEFAULT_SOURCE@", f"{val}%"], stderr=subprocess.DEVNULL)
+                subprocess.run(["pactl", "set-source-mute", "@DEFAULT_SOURCE@", "1" if self.is_muted else "0"], stderr=subprocess.DEVNULL)
             except Exception as e:
                 print(f"MicrophoneChainManager pactl error: {e}")
 

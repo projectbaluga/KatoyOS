@@ -10,6 +10,11 @@ cat >> "$CFG" <<CF
 [all]
 # --- KatoyOS ---
 disable_splash=1
+hdmi_force_hotplug=1
+hdmi_drive=2
+hdmi_group=1
+hdmi_mode=16
+disable_overscan=1
 CF
 
 # Quiet boot with the Plymouth splash
@@ -24,6 +29,13 @@ cat > "$R/etc/systemd/journald.conf.d/katoy.conf" <<JD
 Storage=volatile
 RuntimeMaxUse=32M
 JD
+
+# Enable Systemd Hardware Watchdog
+install -d "$R/etc/systemd/system.conf.d"
+cat > "$R/etc/systemd/system.conf.d/watchdog.conf" <<WD
+[Manager]
+RuntimeWatchdogSec=15s
+WD
 
 # Pi 3B boots kernel7.img; the Pi 1/Zero (v6) and 64-bit (v8) kernels are dead weight here.
 # Removal is skipped if apt would also remove anything that is not a kernel package.

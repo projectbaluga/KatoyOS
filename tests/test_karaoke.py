@@ -123,3 +123,13 @@ def test_stable_code_assignment_and_index_change():
         db.close()
     finally:
         shutil.rmtree(tmpdir)
+
+
+def test_calculate_elapsed_seconds():
+    calc_fn = kk["calculate_elapsed_seconds"]
+
+    assert calc_fn(0, 1000, 180.0) == 0.0
+    assert calc_fn(500, 1000, 180.0) == 90.0
+    assert calc_fn(1000, 1000, 180.0) == 180.0
+    assert calc_fn(-10, 1000, 180.0) == 0.0
+    assert calc_fn(1500, 1000, 180.0) == 180.0

@@ -1,0 +1,6 @@
+[Desktop Entry]
+Type=Application
+Name=KatoyOS Disable Screen Blanking
+Exec=sh -c "xset s off -dpms s noblank"
+NoDisplay=true
+X-LXQt-Need-Tray=false

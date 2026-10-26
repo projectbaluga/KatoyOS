@@ -73,19 +73,31 @@ done
 
 echo "=== Running Assertions ==="
 
-# 1. Assert config.txt ends with [all] block and has single vc4-kms-v3d
+# 1. Assert config.txt replaces full-KMS with fake-KMS and includes forced HDMI settings
 CFG="$WORK_DIR/boot/firmware/config.txt"
-VC4_COUNT=$(grep -c "dtoverlay=vc4-kms-v3d" "$CFG" || true)
-if [ "$VC4_COUNT" -ne 1 ]; then
-    echo "FAIL: Expected exactly 1 instance of vc4-kms-v3d in config.txt, found $VC4_COUNT"
+KMS_COUNT=$(grep -c "dtoverlay=vc4-kms-v3d" "$CFG" || true)
+if [ "$KMS_COUNT" -ne 0 ]; then
+    echo "FAIL: Expected 0 instances of vc4-kms-v3d in config.txt, found $KMS_COUNT"
     exit 1
 fi
 
-TAIL_LINE=$(tail -n 3 "$CFG" | grep "disable_splash=1" || true)
-if [ -z "$TAIL_LINE" ]; then
-    echo "FAIL: config.txt does not end with disable_splash=1 in [all] block"
+FKMS_COUNT=$(grep -c "dtoverlay=vc4-fkms-v3d" "$CFG" || true)
+if [ "$FKMS_COUNT" -ne 1 ]; then
+    echo "FAIL: Expected exactly 1 instance of vc4-fkms-v3d in config.txt, found $FKMS_COUNT"
     exit 1
 fi
+
+if ! grep -q "disable_splash=1" "$CFG"; then
+    echo "FAIL: config.txt missing disable_splash=1"
+    exit 1
+fi
+
+for hdmi_setting in "hdmi_force_hotplug=1" "hdmi_group=1" "hdmi_mode=16" "hdmi_drive=2"; do
+    if ! grep -q "$hdmi_setting" "$CFG"; then
+        echo "FAIL: config.txt missing $hdmi_setting"
+        exit 1
+    fi
+done
 
 # 2. Assert cmdline.txt is still one line and keeps ROOTDEV
 CMD="$WORK_DIR/boot/firmware/cmdline.txt"
@@ -127,6 +139,16 @@ fi
 # 5. Assert installed tools and files exist with correct modes
 [ -x "$WORK_DIR/usr/bin/katoy-welcome" ] || { echo "FAIL: katoy-welcome missing or not executable"; exit 1; }
 [ -x "$WORK_DIR/usr/lib/katoyos/helper" ] || { echo "FAIL: katoy-helper missing or not executable"; exit 1; }
+[ -f "$WORK_DIR/etc/xdg/autostart/katoy-noblank.desktop" ] || { echo "FAIL: katoy-noblank.desktop missing"; exit 1; }
 [ -f "$WORK_DIR/usr/share/backgrounds/katoyos/default.png" ] || { echo "FAIL: wallpaper missing"; exit 1; }
+
+# 6. Assert new runtime packages exist in package list
+PKGS_FILE="$REPO_ROOT/stage-katoy/00-packages/00-packages-nr"
+for pkg in "dbus-x11" "accountsservice" "x11-xserver-utils"; do
+    if ! grep -q "^$pkg$" "$PKGS_FILE"; then
+        echo "FAIL: Package $pkg missing from $PKGS_FILE"
+        exit 1
+    fi
+done
 
 echo "=== All test harness assertions PASSED successfully! ==="

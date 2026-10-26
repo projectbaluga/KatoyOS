@@ -10,3 +10,4 @@ install -m 644 files/katoy-welcome.desktop  "$R/usr/share/applications/katoy-wel
 install -m 644 files/katoy-update.desktop   "$R/usr/share/applications/katoy-update.desktop"
 install -m 644 files/katoy-welcome-autostart.desktop "$R/etc/xdg/autostart/katoy-welcome.desktop"
 install -m 644 files/katoy-powerwatch.desktop        "$R/etc/xdg/autostart/katoy-powerwatch.desktop"
+install -m 644 files/katoy-noblank.desktop           "$R/etc/xdg/autostart/katoy-noblank.desktop"

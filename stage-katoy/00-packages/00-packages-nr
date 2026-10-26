@@ -28,6 +28,9 @@ udisks2
 gvfs
 gvfs-fuse
 dbus-user-session
+dbus-x11
+accountsservice
+x11-xserver-utils
 xdg-user-dirs
 xdg-utils
 libnotify-bin

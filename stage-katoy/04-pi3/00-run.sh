@@ -2,14 +2,23 @@
 R="${ROOTFS_DIR}"
 
 # config.txt ends with [cm4]/[pi5] sections, so open [all] before adding our lines.
-# (vc4-kms-v3d is already enabled by pi-gen.)
 CFG="$R/boot/firmware/config.txt"
 [ -f "$CFG" ] || CFG="$R/boot/config.txt"
+
+# Switch from full-KMS (vc4-kms-v3d) to fake-KMS (vc4-fkms-v3d) for Raspberry Pi 3B HDMI reliability
+if [ "${KATOY_USE_FKMS:-1}" = "1" ]; then
+    sed -i 's/dtoverlay=vc4-kms-v3d/dtoverlay=vc4-fkms-v3d/g' "$CFG"
+fi
+
 cat >> "$CFG" <<CF
 
 [all]
 # --- KatoyOS ---
 disable_splash=1
+hdmi_force_hotplug=1
+hdmi_group=1
+hdmi_mode=16
+hdmi_drive=2
 CF
 
 # Quiet boot with the Plymouth splash

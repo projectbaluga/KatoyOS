@@ -7,7 +7,7 @@ Features:
  - Song Reservation / Queueing System
  - Key/Pitch Transposition (-6 to +6)
  - Tempo Adjustment (50% to 150%)
- - Pinoy Videoke Scoring System (85-100 with praise text)
+ - Pinoy Videoke Cosmetic Scoring Banner System (85-100 with praise text)
  - Real-time highlighted synchronized lyrics & background slideshow
 """
 
@@ -94,18 +94,41 @@ def detect_usb_songs_dir():
     return None
 
 
+_SOUNDFONT_CACHE = {}
+
+
 def find_soundfont(configured_path, usb_dir):
     if configured_path and Path(configured_path).exists():
         return Path(configured_path)
 
     if usb_dir and usb_dir.exists():
         usb_root = usb_dir.parent if usb_dir.name in ("songs", "karaoke", "midi", "kar", "SONGS", "KARAOKE", "MIDI", "KAR") else usb_dir
+        cache_key = str(usb_root.resolve())
+        if cache_key in _SOUNDFONT_CACHE:
+            cached = _SOUNDFONT_CACHE[cache_key]
+            if cached and cached.exists():
+                return cached
+
+        # Shallow search up to depth 2 to avoid blocking the UI poll loop on large drives
+        sf_found = None
         try:
-            sf_files = list(usb_root.rglob("*.sf2"))
-            if sf_files:
-                return sf_files[0]
+            for item in usb_root.iterdir():
+                if item.is_file() and item.suffix.lower() == ".sf2":
+                    sf_found = item
+                    break
+                elif item.is_dir() and not item.name.startswith("."):
+                    for subitem in item.iterdir():
+                        if subitem.is_file() and subitem.suffix.lower() == ".sf2":
+                            sf_found = subitem
+                            break
+                    if sf_found:
+                        break
         except Exception:
             pass
+
+        _SOUNDFONT_CACHE[cache_key] = sf_found
+        if sf_found:
+            return sf_found
 
     for sys_sf in SYSTEM_SOUNDFONTS:
         if sys_sf.exists():
@@ -160,20 +183,39 @@ def parse_filename_metadata(filepath, code_num):
     return code_str, title, artist
 
 
-def pitch_transpose_midi_file(src_path, dst_path, semi_tones):
-    if semi_tones == 0:
+def process_midi_file(src_path, dst_path, semi_tones, tempo_multiplier):
+    if semi_tones == 0 and abs(tempo_multiplier - 1.0) < 1e-4:
         return src_path
     try:
-        mid = mido.MidiFile(src_path)
+        try:
+            mid = mido.MidiFile(src_path)
+        except Exception:
+            mid = mido.MidiFile(src_path, charset='latin1')
+
+        has_tempo_msg = any(msg.type == 'set_tempo' for track in mid.tracks for msg in track)
+
         for track in mid.tracks:
             for msg in track:
                 if msg.type in ('note_on', 'note_off') and hasattr(msg, 'channel') and msg.channel != 9:
-                    msg.note = max(0, min(127, msg.note + semi_tones))
+                    if semi_tones != 0:
+                        msg.note = max(0, min(127, msg.note + semi_tones))
+                elif msg.type == 'set_tempo' and abs(tempo_multiplier - 1.0) >= 1e-4:
+                    msg.tempo = max(1, int(msg.tempo / tempo_multiplier))
+
+        if not has_tempo_msg and abs(tempo_multiplier - 1.0) >= 1e-4:
+            new_tempo = max(1, int(500000 / tempo_multiplier))
+            if mid.tracks:
+                mid.tracks[0].insert(0, mido.MetaMessage('set_tempo', tempo=new_tempo, time=0))
+
         mid.save(dst_path)
         return dst_path
     except Exception as e:
-        print(f"Pitch transpose error: {e}")
+        print(f"MIDI process error: {e}")
         return src_path
+
+
+def pitch_transpose_midi_file(src_path, dst_path, semi_tones):
+    return process_midi_file(src_path, dst_path, semi_tones, 1.0)
 
 
 def extract_midi_lyrics_and_duration(filepath):
@@ -181,7 +223,7 @@ def extract_midi_lyrics_and_duration(filepath):
         try:
             mid = mido.MidiFile(filepath)
         except Exception:
-            mid = mido.MidiFile(filepath, encoding='latin1')
+            mid = mido.MidiFile(filepath, charset='latin1')
     except Exception as e:
         return [], 0.0, Path(filepath).stem, ""
 
@@ -306,12 +348,22 @@ class SongDatabase:
 
         audio_files.sort()
 
+        latest_on_disk_mtime = 0.0
+        for fp in audio_files:
+            try:
+                m = fp.stat().st_mtime
+                if m > latest_on_disk_mtime:
+                    latest_on_disk_mtime = m
+            except Exception:
+                pass
+
         if not force:
             cur = self.conn.cursor()
             cur.execute("SELECT COUNT(*), MAX(mtime) FROM songs")
             count, max_mtime = cur.fetchone()
-            if count == len(audio_files) and count > 0:
-                return count
+            if count == len(audio_files) and count > 0 and max_mtime is not None:
+                if latest_on_disk_mtime <= max_mtime:
+                    return count
 
         with self.conn:
             self.conn.execute("DELETE FROM songs")
@@ -409,11 +461,11 @@ class KaraokeApp(QWidget):
         p.setColor(QPalette.ColorRole.WindowText, QColor(240, 240, 240))
         self.setPalette(p)
 
-        self.layout = QVBoxLayout(self)
-        self.layout.setContentsMargins(0, 0, 0, 0)
+        self.root_layout = QVBoxLayout(self)
+        self.root_layout.setContentsMargins(0, 0, 0, 0)
 
         self.stack = QStackedWidget()
-        self.layout.addWidget(self.stack)
+        self.root_layout.addWidget(self.stack)
 
         self.no_usb_page = self.create_no_usb_page()
         self.stack.addWidget(self.no_usb_page)
@@ -443,6 +495,12 @@ class KaraokeApp(QWidget):
 
         sc_minus = QShortcut(QKeySequence("-"), self, lambda: self.adjust_key(-1))
         sc_minus.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
+
+        sc_tempo_up = QShortcut(QKeySequence("]"), self, lambda: self.adjust_tempo(0.05))
+        sc_tempo_up.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
+
+        sc_tempo_down = QShortcut(QKeySequence("["), self, lambda: self.adjust_tempo(-0.05))
+        sc_tempo_down.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
 
         sc_n = QShortcut(QKeySequence("N"), self, self.on_next_shortcut)
         sc_n.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
@@ -615,6 +673,7 @@ class KaraokeApp(QWidget):
                        "• [R] Reserve Song\n"
                        "• [N] Play Next Reserved\n"
                        "• [+/-] Key Transpose\n"
+                       "• [[/]] Tempo Control\n"
                        "• [Space] Pause / Resume\n"
                        "• [Esc] Stop / Back")
         hints.setFont(QFont("Inter", 11))
@@ -657,10 +716,16 @@ class KaraokeApp(QWidget):
         self.key_lbl.setFont(QFont("Inter", 14, QFont.Weight.Bold))
         self.key_lbl.setStyleSheet("color: #f59e0b; background: rgba(0,0,0,0.7); padding: 4px 10px; border-radius: 6px;")
 
+        # Tempo Indicator
+        self.tempo_lbl = QLabel("TEMPO: 100%")
+        self.tempo_lbl.setFont(QFont("Inter", 14, QFont.Weight.Bold))
+        self.tempo_lbl.setStyleSheet("color: #10b981; background: rgba(0,0,0,0.7); padding: 4px 10px; border-radius: 6px;")
+
         top_bar.addWidget(self.p_code_lbl)
         top_bar.addWidget(self.p_title_lbl)
         top_bar.addWidget(self.p_artist_lbl)
         top_bar.addWidget(self.key_lbl)
+        top_bar.addWidget(self.tempo_lbl)
         top_bar.addStretch()
 
         stop_btn = QPushButton("🔙 Song List")
@@ -745,6 +810,16 @@ class KaraokeApp(QWidget):
         key_up_btn.setStyleSheet("background: rgba(55, 65, 81, 0.8); color: white; border-radius: 6px; padding: 8px 14px;")
         key_up_btn.clicked.connect(lambda: self.adjust_key(1))
 
+        tempo_down_btn = QPushButton("TEMPO -")
+        tempo_down_btn.setFont(QFont("Inter", 11, QFont.Weight.Bold))
+        tempo_down_btn.setStyleSheet("background: rgba(55, 65, 81, 0.8); color: white; border-radius: 6px; padding: 8px 14px;")
+        tempo_down_btn.clicked.connect(lambda: self.adjust_tempo(-0.05))
+
+        tempo_up_btn = QPushButton("TEMPO +")
+        tempo_up_btn.setFont(QFont("Inter", 11, QFont.Weight.Bold))
+        tempo_up_btn.setStyleSheet("background: rgba(55, 65, 81, 0.8); color: white; border-radius: 6px; padding: 8px 14px;")
+        tempo_up_btn.clicked.connect(lambda: self.adjust_tempo(0.05))
+
         self.pause_btn = QPushButton("⏸ Pause")
         self.pause_btn.setFont(QFont("Inter", 12, QFont.Weight.Bold))
         self.pause_btn.setStyleSheet("background: rgba(0, 122, 204, 0.85); color: white; border-radius: 6px; padding: 8px 20px;")
@@ -757,6 +832,8 @@ class KaraokeApp(QWidget):
 
         ctrl_lay.addWidget(key_down_btn)
         ctrl_lay.addWidget(key_up_btn)
+        ctrl_lay.addWidget(tempo_down_btn)
+        ctrl_lay.addWidget(tempo_up_btn)
         ctrl_lay.addWidget(self.pause_btn)
         ctrl_lay.addWidget(next_btn)
 
@@ -794,12 +871,32 @@ class KaraokeApp(QWidget):
         if self.songs_dir != usb_dir:
             self.songs_dir = usb_dir
             db_path = (usb_dir / ".katoy-karaoke.db") if usb_dir.is_dir() else (usb_dir.parent / ".katoy-karaoke.db")
+            db_loaded = False
             try:
                 self.db = SongDatabase(db_path)
                 count = self.db.index_songs(self.songs_dir)
                 self.status_lbl.setText(f"Loaded {count} songs from {self.songs_dir.name}")
+                db_loaded = True
             except Exception as e:
-                self.status_lbl.setText(f"Error indexing songs: {e}")
+                if self.db:
+                    try:
+                        self.db.close()
+                    except Exception:
+                        pass
+                    self.db = None
+
+            if not db_loaded:
+                # Fall back to writable location in /tmp for read-only USB drives
+                fallback_dir = Path("/tmp/katoy_karaoke")
+                try:
+                    fallback_dir.mkdir(parents=True, exist_ok=True)
+                    safe_name = re.sub(r'[^a-zA-Z0-9_-]', '_', usb_dir.name)
+                    fallback_db_path = fallback_dir / f".katoy-karaoke-{safe_name}.db"
+                    self.db = SongDatabase(fallback_db_path)
+                    count = self.db.index_songs(self.songs_dir)
+                    self.status_lbl.setText(f"Loaded {count} songs from {self.songs_dir.name} (read-only mode)")
+                except Exception as e:
+                    self.status_lbl.setText(f"Error indexing songs: {e}")
 
             self.soundfont = find_soundfont(self.config.get("SOUNDFONT"), self.songs_dir)
             self.backgrounds = find_backgrounds(self.config.get("BACKGROUND"), self.songs_dir)
@@ -881,6 +978,18 @@ class KaraokeApp(QWidget):
         self.pitch_key = max(-6, min(6, self.pitch_key + delta))
         self.key_lbl.setText(f"KEY: {self.pitch_key:+d}")
         self.status_lbl.setText(f"Key Transpose set to: {self.pitch_key:+d}")
+        if self.is_playing and self.current_song:
+            code, title, artist, filepath = self.current_song
+            self.start_playback(code, title, artist, filepath)
+
+    def adjust_tempo(self, delta):
+        self.tempo_multiplier = max(0.5, min(1.5, round(self.tempo_multiplier + delta, 2)))
+        tempo_pct = int(round(self.tempo_multiplier * 100))
+        self.tempo_lbl.setText(f"TEMPO: {tempo_pct}%")
+        self.status_lbl.setText(f"Tempo set to: {tempo_pct}%")
+        if self.is_playing and self.current_song:
+            code, title, artist, filepath = self.current_song
+            self.start_playback(code, title, artist, filepath)
 
     def play_selected_or_first(self):
         query = self.search_input.text().strip()
@@ -924,11 +1033,20 @@ class KaraokeApp(QWidget):
         self.p_title_lbl.setText(title)
         self.p_artist_lbl.setText(artist)
         self.key_lbl.setText(f"KEY: {self.pitch_key:+d}")
+        tempo_pct = int(round(self.tempo_multiplier * 100))
+        self.tempo_lbl.setText(f"TEMPO: {tempo_pct}%")
         self.score_banner.hide()
 
         lines, duration, m_title, m_artist = extract_midi_lyrics_and_duration(filepath)
+        if self.tempo_multiplier > 0:
+            duration = duration / self.tempo_multiplier
+            for line in lines:
+                line['start_sec'] = line['start_sec'] / self.tempo_multiplier
+                for syl in line['syllables']:
+                    syl['sec'] = syl['sec'] / self.tempo_multiplier
+
         self.lyrics_lines = lines
-        self.song_duration = duration if duration > 0 else 180.0
+        self.song_duration = duration if duration > 0 else (180.0 / self.tempo_multiplier)
 
         if m_title and title == fp.stem:
             self.p_title_lbl.setText(m_title)
@@ -936,9 +1054,9 @@ class KaraokeApp(QWidget):
             self.p_artist_lbl.setText(m_artist)
 
         play_file = fp
-        if self.pitch_key != 0:
-            tmp_midi = Path("/tmp/katoy_transposed.mid")
-            play_file = pitch_transpose_midi_file(fp, tmp_midi, self.pitch_key)
+        if self.pitch_key != 0 or abs(self.tempo_multiplier - 1.0) >= 1e-4:
+            tmp_midi = Path("/tmp/katoy_processed.mid")
+            play_file = process_midi_file(fp, tmp_midi, self.pitch_key, self.tempo_multiplier)
 
         audio_driver = self.config.get("AUDIO_DRIVER", "pulseaudio")
         cmd = ["fluidsynth", "-i", "-a", audio_driver, "-g", "0.8", str(self.soundfont), str(play_file)]
@@ -982,6 +1100,7 @@ class KaraokeApp(QWidget):
             self.pause_btn.setText("▶ Resume")
 
     def show_pinoy_score_banner(self):
+        """Displays a cosmetic videoke end-of-song score banner (random 88-100 with praise text)."""
         score = random.randint(88, 100)
         praise = "👏 MAGALING!"
         for min_s, txt in PRAISE_TEXTS:

@@ -20,5 +20,10 @@ case "${1:-}" in
 		kb="${2:-}"
 		[[ "$kb" =~ ^[a-z0-9_]+$ ]] || { echo "bad layout" >&2; exit 1; }
 		localectl set-x11-keymap "$kb" ;;
+	set-wifi-credentials)
+		ssid="${2:-}"
+		pass="${3:-}"
+		[ -n "$ssid" ] || { echo "bad ssid" >&2; exit 1; }
+		nmcli device wifi connect "$ssid" password "$pass" ;;
 	*) echo "unknown action" >&2; exit 2 ;;
 esac

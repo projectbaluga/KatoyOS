@@ -320,21 +320,64 @@ def get_local_ip():
     return IP
 
 
-def check_wifi_hotspot_status():
-    """Checks NetworkManager connection state and starts setup hotspot if disconnected."""
+def parse_systemd_analyze_output(output_str):
+    """Pure helper function parsing systemd-analyze output."""
+    if not output_str:
+        return None
+    # Example format: Startup finished in 4.120s (kernel) + 17.340s (userspace) = 21.460s
+    m = re.search(r"Startup finished in\s+(.*?)\s*=\s*([\d\.]+[s|ms]+)", output_str)
+    if m:
+        breakdown = m.group(1).strip()
+        total = m.group(2).strip()
+        return f"Boot time: {total} ({breakdown}) | target ~25s"
+    return None
+
+
+def get_systemd_boot_time():
+    """Reads systemd-analyze output to retrieve real boot duration."""
+    if shutil.which("systemd-analyze"):
+        try:
+            res = subprocess.run(["systemd-analyze"], capture_output=True, text=True)
+            parsed = parse_systemd_analyze_output(res.stdout)
+            if parsed:
+                return parsed
+        except Exception:
+            pass
+    return "Boot time: unmeasured (target ~25s)"
+
+
+def parse_nmcli_general_state(output_str):
+    """Pure helper function parsing nmcli general state output."""
+    if not output_str:
+        return "unknown"
+    clean = output_str.strip().lower()
+    if "connected (local only)" in clean or "connected (site only)" in clean:
+        return "limited"
+    elif "disconnected" in clean or "asleep" in clean:
+        return "disconnected"
+    elif "connected" in clean:
+        return "connected"
+    return clean
+
+
+def check_and_trigger_wifi_hotspot(config):
+    """Checks NetworkManager connection state and launches AP setup hotspot if disconnected."""
     if not shutil.which("nmcli"):
         return False, ""
     try:
         res = subprocess.run(["nmcli", "-t", "-g", "STATE", "general"], capture_output=True, text=True)
-        state = res.stdout.strip()
-        if "connected" not in state:
+        state = parse_nmcli_general_state(res.stdout)
+        if state != "connected":
+            ssid = config.get("HOTSPOT_SSID", "KatoyOS-Karaoke")
+            password = config.get("HOTSPOT_PASSWORD", "katoyos123")
+            ifname = config.get("HOTSPOT_IFNAME", "wlan0")
             subprocess.run(
-                ["nmcli", "device", "wifi", "hotspot", "ifname", "wlan0", "ssid", "KatoyOS-Karaoke", "password", "katoyos123"],
+                ["nmcli", "device", "wifi", "hotspot", "ifname", ifname, "ssid", ssid, "password", password],
                 stderr=subprocess.DEVNULL
             )
-            return True, "KatoyOS-Karaoke"
-    except Exception:
-        pass
+            return True, ssid
+    except Exception as e:
+        print(f"Hotspot setup error: {e}")
     return False, ""
 
 
@@ -518,6 +561,20 @@ function loadQueue(){
             if self.bridge_signals:
                 self.bridge_signals.skip_song.emit()
             self.send_json({"status": "ok"})
+        elif path == "/wifi":
+            ssid = params.get("ssid", [""])[0]
+            passw = params.get("password", [""])[0]
+            if ssid:
+                try:
+                    subprocess.run(
+                        ["pkexec", "/usr/lib/katoyos/helper", "set-wifi-credentials", ssid, passw],
+                        check=True
+                    )
+                    self.send_json({"status": "ok", "msg": f"Wi-Fi credentials for {ssid} applied!"})
+                except Exception as e:
+                    self.send_json({"error": f"Failed to connect: {e}"}, 500)
+            else:
+                self.send_json({"error": "Missing SSID"}, 400)
         else:
             self.send_json({"error": "Not Found"}, 404)
 
@@ -1251,13 +1308,19 @@ class KaraokeApp(QWidget):
         remote_port = self.config.get("REMOTE_PORT", "8080")
         remote_url = f"http://{remote_ip}:{remote_port}"
 
+        is_ap, ap_ssid = check_and_trigger_wifi_hotspot(self.config)
+
         qr_box = QVBoxLayout()
         qr_box.setAlignment(Qt.AlignmentFlag.AlignCenter)
         qr_lbl = QLabel()
         qr_lbl.setPixmap(create_qr_pixmap(remote_url, scale=5))
         qr_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
-        qr_txt = QLabel(f"📱 Phone Remote: {remote_url}")
+        display_text = f"📱 Phone Remote: {remote_url}"
+        if is_ap:
+            display_text += f"\n📡 Wi-Fi Setup Hotspot Active: SSID '{ap_ssid}' (pass: katoyos123)"
+
+        qr_txt = QLabel(display_text)
         qr_txt.setFont(QFont("Inter", 13, QFont.Weight.Bold))
         qr_txt.setStyleSheet("color: #a7f3d0; margin-top: 6px;")
         qr_txt.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -1368,14 +1431,9 @@ class KaraokeApp(QWidget):
         left_col.addLayout(action_bar)
 
         footer = QHBoxLayout()
-        uptime_sec = 0.0
-        try:
-            with open("/proc/uptime", "r") as uf:
-                uptime_sec = float(uf.read().split()[0])
-        except Exception:
-            pass
+        boot_info = get_systemd_boot_time()
 
-        self.status_lbl = QLabel(f"Ready (App boot time target: ~25s | /proc/uptime: {uptime_sec:.1f}s)")
+        self.status_lbl = QLabel(f"Ready ({boot_info})")
         self.status_lbl.setFont(QFont("Inter", 11))
         self.status_lbl.setStyleSheet("color: #8a92a6;")
 

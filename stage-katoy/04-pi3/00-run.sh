@@ -20,7 +20,14 @@ CF
 # Quiet boot with the Plymouth splash
 CMD="$R/boot/firmware/cmdline.txt"
 [ -f "$CMD" ] || CMD="$R/boot/cmdline.txt"
-sed -i 's/ *$/ quiet splash plymouth.ignore-serial-consoles/' "$CMD"
+sed -i 's/ *$/ quiet splash plymouth.ignore-serial-consoles loglevel=3 logo.nologo vt.global_cursor_default=0/' "$CMD"
+
+# Services a karaoke appliance never uses (shaves boot time and RAM)
+on_chroot << 'CHEOF'
+for u in ModemManager.service triggerhappy.service e2scrub_all.timer; do
+	systemctl disable "$u" >/dev/null 2>&1 || true
+done
+CHEOF
 
 # Keep the journal in RAM to spare the SD card
 install -d "$R/etc/systemd/journald.conf.d"

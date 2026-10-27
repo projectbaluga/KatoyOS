@@ -1,15 +1,33 @@
 [Unit]
-Description=KatoyOS Karaoke Appliance Autostart
-After=sound.target network.target graphical.target
-Wants=sound.target
+Description=KatoyOS Karaoke appliance (boots straight into the player)
+# Same ordering getty@tty1 uses, so we take over tty1 right after the boot splash.
+# NOTE: deliberately NOT ordered after graphical.target - we are WantedBy multi-user.target,
+# so that would be an ordering cycle and systemd would silently drop the job.
+After=systemd-user-sessions.service plymouth-quit-wait.service getty@tty1.service sound.target NetworkManager.service
+Conflicts=getty@tty1.service
+# If the player keeps crashing, hand tty1 back to a login prompt so the box is never a brick.
+OnFailure=getty@tty1.service
+StartLimitIntervalSec=60
+StartLimitBurst=8
 
 [Service]
 Type=simple
 User=katoy
-Environment=DISPLAY=:0
-ExecStart=/usr/bin/xinit /usr/bin/katoy-karaoke-launcher -- :0 -nocursor
+# A real login session: creates /run/user/UID (PipeWire needs it) and gives X11 a VT via logind.
+PAMName=login
+TTYPath=/dev/tty1
+TTYReset=yes
+TTYVHangup=yes
+TTYVTDisallocate=yes
+StandardInput=tty-fail
+StandardOutput=journal
+StandardError=journal
+UtmpIdentifier=tty1
+UtmpMode=user
+ExecStart=/usr/bin/xinit /usr/bin/katoy-karaoke-launcher -- /usr/bin/X :0 vt1 -nocursor -nolisten tcp -noreset -quiet
 Restart=always
-RestartSec=2s
+RestartSec=2
+TimeoutStopSec=10
 
 [Install]
 WantedBy=multi-user.target

@@ -1,16 +1,28 @@
 #!/bin/bash
-# KatoyOS Karaoke Appliance Session Launcher
+# KatoyOS karaoke appliance session. Started by xinit from katoy-karaoke.service as user "katoy".
+# When this script exits, X exits and systemd restarts the whole thing.
 
-# Start udiskie for non-desktop USB automounting under /media/katoy
+export QT_QPA_PLATFORM=xcb
+export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
+
+# Never blank the screen or let the monitor sleep in the middle of a song.
+if command -v xset >/dev/null 2>&1; then
+    xset s off
+    xset s noblank
+    xset -dpms
+fi
+# Match the app backdrop so there is no white flash between X starting and the first frame.
+command -v xsetroot >/dev/null 2>&1 && xsetroot -solid '#0a061f'
+
+# Tiny window manager: gives the fullscreen window proper keyboard focus.
+command -v openbox >/dev/null 2>&1 && openbox --sm-disable &
+
+# USB sticks mount under /media/katoy (headless: no tray, no popups, no file manager).
 if command -v udiskie >/dev/null 2>&1; then
-    mkdir -p /media/katoy
-    udiskie -2 -s -f /media/katoy &
+    udiskie --automount --no-tray --no-notify --no-file-manager &
 fi
 
-# Start hardware throttling powerwatch daemon
-if [ -x /usr/bin/katoy-powerwatch ]; then
-    /usr/bin/katoy-powerwatch &
-fi
+# Under-voltage / thermal watchdog.
+[ -x /usr/bin/katoy-powerwatch ] && /usr/bin/katoy-powerwatch &
 
-# Launch fullscreen Karaoke application
 exec /usr/bin/katoy-karaoke

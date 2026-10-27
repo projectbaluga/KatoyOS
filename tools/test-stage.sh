@@ -61,6 +61,7 @@ export -f on_chroot
 export ROOTFS_DIR="$WORK_DIR"
 export FIRST_USER_NAME="katoy"
 export KATOY_PRUNE_KERNELS=1
+export KATOY_KIOSK=1
 
 echo "=== Running sub-stages ==="
 for stage in 01-branding 02-desktop 03-tools 04-pi3; do
@@ -81,9 +82,8 @@ if [ "$VC4_COUNT" -ne 1 ]; then
     exit 1
 fi
 
-TAIL_LINE=$(tail -n 3 "$CFG" | grep "disable_splash=1" || true)
-if [ -z "$TAIL_LINE" ]; then
-    echo "FAIL: config.txt does not end with disable_splash=1 in [all] block"
+if ! sed -n '/^\[all\]/,$p' "$CFG" | grep -q "disable_splash=1"; then
+    echo "FAIL: config.txt [all] block does not contain disable_splash=1"
     exit 1
 fi
 
@@ -117,12 +117,20 @@ if ! grep -q 'NAME="KatoyOS"' "$OS_REL"; then
     exit 1
 fi
 
-# 4. Assert lightdm autologin file is correct
-LDM_CONF="$WORK_DIR/etc/lightdm/lightdm.conf.d/50-katoy.conf"
-if ! grep -q "autologin-user=katoy" "$LDM_CONF"; then
-    echo "FAIL: LightDM autologin user katoy not set correctly"
-    exit 1
+# 4. Assert the karaoke appliance really starts at boot
+SVC="$WORK_DIR/etc/systemd/system/katoy-karaoke.service"
+[ -f "$SVC" ] || { echo "FAIL: katoy-karaoke.service not installed"; exit 1; }
+[ -L "$WORK_DIR/etc/systemd/system/multi-user.target.wants/katoy-karaoke.service" ] || { echo "FAIL: katoy-karaoke.service is not enabled (no wants symlink)"; exit 1; }
+[ "$(readlink "$WORK_DIR/etc/systemd/system/default.target")" = "/lib/systemd/system/multi-user.target" ] || { echo "FAIL: default.target is not multi-user.target"; exit 1; }
+grep -q "^User=katoy" "$SVC" || { echo "FAIL: service User= not set to the first user"; exit 1; }
+grep -q "^PAMName=login" "$SVC" || { echo "FAIL: service has no PAM session (no audio runtime dir)"; exit 1; }
+if grep -E "^After=.*graphical\.target" "$SVC"; then
+    echo "FAIL: service ordered After=graphical.target while WantedBy=multi-user.target (ordering cycle)"; exit 1
 fi
+[ -f "$WORK_DIR/var/lib/systemd/linger/katoy" ] || { echo "FAIL: linger not enabled for katoy"; exit 1; }
+[ -x "$WORK_DIR/usr/bin/katoy-karaoke-launcher" ] || { echo "FAIL: launcher missing or not executable"; exit 1; }
+[ -f "$WORK_DIR/etc/X11/Xwrapper.config" ] || { echo "FAIL: Xwrapper.config missing"; exit 1; }
+grep -q "^KIOSK=1" "$WORK_DIR/etc/katoyos/karaoke.conf" || { echo "FAIL: karaoke.conf KIOSK is not 1"; exit 1; }
 
 # 5. Assert installed tools and files exist with correct modes
 [ -x "$WORK_DIR/usr/bin/katoy-welcome" ] || { echo "FAIL: katoy-welcome missing or not executable"; exit 1; }
@@ -130,7 +138,6 @@ fi
 [ -x "$WORK_DIR/usr/lib/katoyos/helper" ] || { echo "FAIL: katoy-helper missing or not executable"; exit 1; }
 [ -f "$WORK_DIR/etc/katoyos/karaoke.conf" ] || { echo "FAIL: karaoke.conf missing"; exit 1; }
 [ -f "$WORK_DIR/usr/share/applications/katoy-karaoke.desktop" ] || { echo "FAIL: katoy-karaoke.desktop missing"; exit 1; }
-[ -f "$WORK_DIR/etc/xdg/autostart/katoy-karaoke.desktop" ] || { echo "FAIL: katoy-karaoke-autostart.desktop missing"; exit 1; }
 [ -f "$WORK_DIR/usr/share/backgrounds/katoyos/default.png" ] || { echo "FAIL: wallpaper missing"; exit 1; }
 
 echo "=== All test harness assertions PASSED successfully! ==="

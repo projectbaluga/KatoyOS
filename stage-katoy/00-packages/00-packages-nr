@@ -2,6 +2,10 @@
 xserver-xorg-core
 xserver-xorg-input-libinput
 xinit
+xserver-xorg-legacy
+x11-xserver-utils
+libxcb-cursor0
+fonts-dejavu-core
 openbox
 udiskie
 qterminal

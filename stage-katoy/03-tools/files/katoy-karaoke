@@ -2,6 +2,7 @@
 """KatoyOS Karaoke Player (katoy-karaoke).
 
 Standalone, fullscreen Pinoy-style MIDI/KAR karaoke player for KatoyOS.
+Boots straight into this app (see katoy-karaoke.service) - no desktop session involved.
 Features:
  - USB Auto-Detection & SQLite Song Database
  - Song Reservation / Queueing System
@@ -13,6 +14,9 @@ Features:
 
 import os
 import re
+import math
+import html
+import threading
 import sys
 import time
 import shutil
@@ -23,12 +27,16 @@ import ctypes
 import ctypes.util
 from pathlib import Path
 
-from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QObject, QThread
-from PyQt6.QtGui import QFont, QIcon, QPixmap, QKeySequence, QShortcut, QColor, QPalette
+from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QObject, QThread, QRect, QRectF, QPointF, QSize, QEvent
+from PyQt6.QtGui import (
+    QFont, QIcon, QPixmap, QKeySequence, QShortcut, QColor, QPalette, QPainter, QPen, QBrush,
+    QLinearGradient, QRadialGradient, QPainterPath, QPolygonF, QFontMetrics, QFontMetricsF
+)
 from PyQt6.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit,
     QPushButton, QTableWidget, QTableWidgetItem, QHeaderView, QStackedWidget,
-    QProgressBar, QMessageBox, QFrame, QListWidget, QListWidgetItem
+    QProgressBar, QMessageBox, QFrame, QListWidget, QListWidgetItem, QStyledItemDelegate, QStyle,
+    QSlider, QSizePolicy, QAbstractItemView, QButtonGroup
 )
 
 
@@ -293,10 +301,10 @@ SYSTEM_SOUNDFONTS = [
 ]
 
 PRAISE_TEXTS = [
-    (98, "🌟 WOW! PERFECT! SUPERSTAR! 🌟"),
-    (95, "🎉 MAGALING! FANTASTIC PERFORMANCE! 🎉"),
-    (90, "👏 HATAW! Galing Kumanta! 👏"),
-    (85, "👍 PWEDE NA! Bawi sa Next Song! 👍")
+    (98, "WOW! PERFECT! SUPERSTAR!"),
+    (95, "MAGALING! FANTASTIC PERFORMANCE!"),
+    (90, "HATAW! Galing Kumanta!"),
+    (85, "PWEDE NA! Bawi sa Next Song!")
 ]
 
 
@@ -310,14 +318,25 @@ from PyQt6.QtGui import QImage
 
 def get_local_ip():
     s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    ip = ''
     try:
         s.connect(('10.255.255.255', 1))
-        IP = s.getsockname()[0]
+        ip = s.getsockname()[0]
     except Exception:
-        IP = '127.0.0.1'
+        ip = ''
     finally:
         s.close()
-    return IP
+    if ip and not ip.startswith('127.'):
+        return ip
+    # No default route (e.g. we ARE the setup hotspot): use any IPv4 address the box has.
+    try:
+        out = subprocess.run(["hostname", "-I"], capture_output=True, text=True, timeout=2).stdout.split()
+        for cand in out:
+            if cand.count(".") == 3 and not cand.startswith("127."):
+                return cand
+    except Exception:
+        pass
+    return '127.0.0.1'
 
 
 def parse_systemd_analyze_output(output_str):
@@ -383,7 +402,7 @@ def check_and_trigger_wifi_hotspot(config):
     try:
         res = subprocess.run(["nmcli", "-t", "-g", "STATE", "general"], capture_output=True, text=True)
         state = parse_nmcli_general_state(res.stdout)
-        if state != "connected":
+        if state in ("disconnected", "unknown"):
             ssid = config.get("HOTSPOT_SSID", "KatoyOS-Karaoke")
             password = config.get("HOTSPOT_PASSWORD", "katoyos123")
             ifname = config.get("HOTSPOT_IFNAME", "wlan0")
@@ -395,6 +414,103 @@ def check_and_trigger_wifi_hotspot(config):
     except Exception as e:
         print(f"Hotspot setup error: {e}")
     return False, ""
+
+
+def wifi_qr_payload(ssid, password):
+    """Standard 'join this Wi-Fi' QR payload (phone cameras connect directly)."""
+    def esc(s):
+        return re.sub(r'([\\;,:"])', r'\\\1', s)
+    return f"WIFI:T:WPA;S:{esc(ssid)};P:{esc(password)};;"
+
+
+def get_nm_state():
+    if not shutil.which("nmcli"):
+        return "absent"
+    try:
+        res = subprocess.run(["nmcli", "-t", "-g", "STATE", "general"], capture_output=True, text=True, timeout=5)
+        return parse_nmcli_general_state(res.stdout)
+    except Exception:
+        return "unknown"
+
+
+def is_hotspot_active():
+    """True while NetworkManager's setup hotspot (connection name 'Hotspot') is up."""
+    if not shutil.which("nmcli"):
+        return False
+    try:
+        res = subprocess.run(["nmcli", "-t", "-f", "NAME", "connection", "show", "--active"],
+                             capture_output=True, text=True, timeout=5)
+        return "Hotspot" in [ln.strip() for ln in res.stdout.splitlines()]
+    except Exception:
+        return False
+
+
+class NetworkWatcher(QThread):
+    """Tracks IP / hotspot state off the UI thread.
+
+    The karaoke app now starts very early in boot, so the Wi-Fi is usually not up yet. We therefore only
+    raise the setup hotspot after the network has been *continuously* down for `HOTSPOT_GRACE` seconds,
+    and we keep refreshing the IP so the idle-screen QR code is never stale.
+    """
+
+    changed = pyqtSignal(str, bool, str)  # ip, hotspot_active, hotspot_ssid
+
+    def __init__(self, config, poll_sec=3.0):
+        super().__init__()
+        self.config = config
+        try:
+            self.grace = float(config.get("HOTSPOT_GRACE", "45") or 45)
+        except ValueError:
+            self.grace = 45.0
+        self.poll = poll_sec
+        self._stop_flag = False
+
+    def stop(self):
+        self._stop_flag = True
+
+    def _sleep(self, secs):
+        end = time.monotonic() + secs
+        while not self._stop_flag and time.monotonic() < end:
+            time.sleep(0.2)
+
+    def run(self):
+        ssid = self.config.get("HOTSPOT_SSID", "KatoyOS-Karaoke")
+        offline_since = None
+        last_attempt = -1e9
+        last = None
+        while not self._stop_flag:
+            state = get_nm_state()
+            ap = is_hotspot_active() if state != "absent" else False
+            now = time.monotonic()
+            if ap or state not in ("disconnected", "unknown"):
+                offline_since = None
+            else:
+                if offline_since is None:
+                    offline_since = now
+                if now - offline_since >= self.grace and now - last_attempt > 60:
+                    last_attempt = now
+                    check_and_trigger_wifi_hotspot(self.config)
+                    ap = is_hotspot_active()
+            info = (get_local_ip(), ap, ssid if ap else "")
+            if info != last:
+                last = info
+                self.changed.emit(*info)
+            self._sleep(self.poll)
+
+
+class FuncWorker(QThread):
+    """Run a blocking function off the UI thread and emit its result."""
+    result = pyqtSignal(object)
+
+    def __init__(self, fn):
+        super().__init__()
+        self.fn = fn
+
+    def run(self):
+        try:
+            self.result.emit(self.fn())
+        except Exception as e:
+            self.result.emit(f"unavailable ({e})")
 
 
 def generate_qr_matrix(text):
@@ -432,21 +548,156 @@ def generate_qr_matrix(text):
         return matrix
 
 
-def create_qr_pixmap(text, scale=6):
+def create_qr_pixmap(text, scale=6, border=2, target_px=None):
+    """QR code on a rounded white tile (quiet zone included, so phone cameras lock on fast).
+
+    With target_px the module size is chosen so the tile is ~that many pixels wide whatever the payload length.
+    """
     matrix = generate_qr_matrix(text)
-    size = len(matrix)
-    img_size = size * scale
-    img = QImage(img_size, img_size, QImage.Format.Format_RGB32)
-    img.fill(QColor(255, 255, 255))
-
-    for r in range(size):
-        for c in range(size):
+    n = len(matrix)
+    if target_px:
+        scale = max(2, int(target_px // (n + border * 2)))
+    side = (n + border * 2) * scale
+    pm = QPixmap(side, side)
+    pm.fill(Qt.GlobalColor.transparent)
+    p = QPainter(pm)
+    p.setRenderHint(QPainter.RenderHint.Antialiasing)
+    p.setPen(Qt.PenStyle.NoPen)
+    p.setBrush(QColor(255, 255, 255))
+    p.drawRoundedRect(QRectF(0, 0, side, side), scale * 2.5, scale * 2.5)
+    p.setBrush(QColor(12, 6, 36))
+    for r in range(n):
+        for c in range(n):
             if matrix[r][c]:
-                for dx in range(scale):
-                    for dy in range(scale):
-                        img.setPixelColor(c * scale + dx, r * scale + dy, QColor(0, 0, 0))
+                p.drawRect((c + border) * scale, (r + border) * scale, scale, scale)
+    p.end()
+    return pm
 
-    return QPixmap.fromImage(img)
+
+REMOTE_HTML = r"""<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0a061f">
+<title>KatoyOS Remote</title>
+<style>
+:root{--pink:#ff2e93;--violet:#8b3cf0;--cyan:#22d3ee;--gold:#ffd166;--mint:#34d399;--muted:#a9a1d6}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+body{margin:0;min-height:100vh;color:#f5f3ff;font-family:Inter,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+ background:radial-gradient(700px 420px at 0% 0%,rgba(255,46,147,.30),transparent 62%),radial-gradient(700px 460px at 100% 100%,rgba(34,211,238,.22),transparent 60%),linear-gradient(#0a061f,#1c0f4a);
+ background-attachment:fixed;padding:calc(16px + env(safe-area-inset-top)) 16px 48px}
+.wrap{max-width:560px;margin:0 auto}
+header{display:flex;align-items:center;gap:12px;margin-bottom:16px}
+.logo{width:44px;height:44px;border-radius:14px;background:linear-gradient(135deg,var(--pink),var(--violet));display:grid;place-items:center;font-size:22px}
+h1{margin:0;font-size:24px;font-weight:900;background:linear-gradient(90deg,var(--pink),var(--gold));-webkit-background-clip:text;background-clip:text;color:transparent}
+.card{background:rgba(255,255,255,.07);border:1px solid rgba(255,255,255,.13);border-radius:22px;padding:16px;margin-bottom:14px;backdrop-filter:blur(8px)}
+.np .lbl{font-size:12px;letter-spacing:.16em;color:var(--muted);font-weight:800}
+.np .t{font-size:22px;font-weight:900;margin:4px 0 2px;overflow-wrap:anywhere}
+.np .a{color:var(--muted);font-weight:600}
+.chips{display:flex;gap:8px;margin-top:10px;flex-wrap:wrap}
+.chip{border-radius:999px;padding:5px 12px;font-weight:800;font-size:13px;background:rgba(255,255,255,.1);border:1px solid rgba(255,255,255,.16)}
+.chip.k{color:var(--gold)}.chip.t{color:#67e8f9}
+input{width:100%;font:inherit;font-size:18px;color:#fff;background:rgba(255,255,255,.09);border:2px solid rgba(255,255,255,.16);border-radius:999px;padding:14px 20px;outline:none}
+input:focus{border-color:var(--cyan)}
+button{font:inherit;font-weight:800;color:#fff;border:1px solid rgba(255,255,255,.18);background:rgba(255,255,255,.11);border-radius:16px;padding:14px 12px;font-size:16px;cursor:pointer}
+button:active{transform:scale(.97)}
+button.p{border:0;background:linear-gradient(90deg,var(--pink),var(--violet))}
+button.m{border:0;color:#052e22;background:linear-gradient(90deg,var(--mint),var(--cyan))}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.grid .wide{grid-column:1/-1}
+.song{display:flex;align-items:center;gap:12px;padding:12px 4px;border-bottom:1px solid rgba(255,255,255,.08)}
+.song:last-child{border:0}.song .c{font-weight:900;color:var(--gold);min-width:56px}
+.song .i{flex:1;min-width:0}.song .i b{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.song .i small{color:var(--muted)}.song button{padding:9px 14px;font-size:14px}
+.q{display:flex;gap:12px;align-items:center;padding:8px 0}
+.q .n{width:34px;height:34px;border-radius:50%;display:grid;place-items:center;font-weight:900;background:linear-gradient(135deg,var(--pink),var(--violet))}
+.muted{color:var(--muted)}h3{margin:0 0 10px;font-size:15px;letter-spacing:.12em;color:var(--muted)}
+#toast{position:fixed;left:50%;bottom:calc(24px + env(safe-area-inset-bottom));transform:translateX(-50%);background:rgba(10,6,31,.95);border:1px solid var(--pink);padding:12px 20px;border-radius:999px;font-weight:700;opacity:0;pointer-events:none;transition:opacity .2s;max-width:90vw}
+#toast.on{opacity:1}
+</style></head><body><div class="wrap">
+<header><div class="logo">&#127908;</div><h1>KatoyOS Remote</h1></header>
+
+<div class="card np"><div class="lbl">NOW SINGING</div>
+ <div class="t" id="np_t">Nothing playing</div><div class="a" id="np_a">Reserve a song below</div>
+ <div class="chips"><span class="chip k" id="np_k">KEY 0</span><span class="chip t" id="np_p">TEMPO 100%</span></div>
+</div>
+
+<div class="card"><input id="q" type="search" inputmode="search" enterkeyhint="search" placeholder="Search code, title or artist&hellip;" autocomplete="off">
+ <div id="results" style="margin-top:6px"></div></div>
+
+<div class="card"><h3>CONTROLS</h3><div class="grid">
+ <button data-act="/api/key?delta=-1">Key &minus;</button><button data-act="/api/key?delta=1">Key +</button>
+ <button data-act="/api/tempo?delta=-0.05">Tempo &minus;</button><button data-act="/api/tempo?delta=0.05">Tempo +</button>
+ <button class="p" data-act="/api/pause">Pause / Resume</button><button class="m" data-act="/api/skip">Next song</button>
+</div></div>
+
+<div class="card"><h3>UP NEXT</h3><div id="queue" class="muted">Queue is empty</div></div>
+<div id="toast"></div></div>
+<script>
+const PIN=new URLSearchParams(location.search).get('pin')||'';
+const $=s=>document.querySelector(s);
+const esc=s=>String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+async function api(p){const u=p+(PIN?(p.includes('?')?'&':'?')+'pin='+encodeURIComponent(PIN):'');
+ try{const r=await fetch(u);return await r.json()}catch(e){return{error:'Connection lost'}}}
+let tt;function toast(m){const t=$('#toast');t.textContent=m;t.classList.add('on');clearTimeout(tt);tt=setTimeout(()=>t.classList.remove('on'),2200)}
+let found=[],deb;
+async function search(){
+ const d=await api('/api/search?q='+encodeURIComponent($('#q').value));
+ found=Array.isArray(d)?d:[];
+ const shown=found.slice(0,60);
+ $('#results').innerHTML=shown.map((s,i)=>`<div class="song"><div class="c">${esc(s[0])}</div><div class="i"><b>${esc(s[1])}</b><small>${esc(s[2])}</small></div><button class="p" data-i="${i}">Reserve</button></div>`).join('')
+  +(found.length>60?`<div class="muted" style="padding:10px 4px">Showing 60 of ${found.length}. Keep typing to narrow it down.</div>`:'')
+  +(found.length?'':'<div class="muted" style="padding:10px 4px">No songs found</div>');
+}
+$('#q').addEventListener('input',()=>{clearTimeout(deb);deb=setTimeout(search,280)});
+$('#q').addEventListener('keydown',e=>{if(e.key==='Enter'){clearTimeout(deb);search();e.target.blur()}});
+$('#results').addEventListener('click',async e=>{const b=e.target.closest('button[data-i]');if(!b)return;
+ const s=found[+b.dataset.i];const d=await api('/api/reserve?code='+encodeURIComponent(s[0]));toast(d.msg||d.error);state()});
+document.querySelectorAll('button[data-act]').forEach(b=>b.addEventListener('click',async()=>{await api(b.dataset.act);state()}));
+async function state(){
+ const d=await api('/api/state');if(d.error)return;
+ $('#np_t').textContent=d.playing?d.title:'Nothing playing';
+ $('#np_a').textContent=d.playing?(d.artist+(d.paused?'  \u00b7  paused':'')):'Reserve a song below';
+ $('#np_k').textContent='KEY '+(d.key>0?'+':'')+d.key;$('#np_p').textContent='TEMPO '+d.tempo+'%';
+ $('#queue').innerHTML=d.queue.length?d.queue.map((s,i)=>`<div class="q"><div class="n">${i+1}</div><div><b>${esc(s[1])}</b><br><small class="muted">${esc(s[0])} \u00b7 ${esc(s[2])}</small></div></div>`).join(''):'Queue is empty';
+}
+search();state();setInterval(state,2000);
+</script></body></html>"""
+
+WIFI_HTML = r"""<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>KatoyOS Wi-Fi Setup</title>
+<style>
+*{box-sizing:border-box}
+body{margin:0;min-height:100vh;display:grid;place-items:center;padding:20px;color:#f5f3ff;font-family:Inter,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+ background:radial-gradient(700px 420px at 0% 0%,rgba(255,46,147,.30),transparent 62%),radial-gradient(700px 460px at 100% 100%,rgba(34,211,238,.22),transparent 60%),linear-gradient(#0a061f,#1c0f4a)}
+.card{width:100%;max-width:420px;background:rgba(255,255,255,.07);border:1px solid rgba(255,255,255,.13);border-radius:24px;padding:26px}
+h2{margin:0 0 6px;font-size:26px;font-weight:900;background:linear-gradient(90deg,#ff2e93,#ffd166);-webkit-background-clip:text;background-clip:text;color:transparent}
+p{color:#a9a1d6;margin:0 0 18px}label{display:block;font-weight:700;font-size:13px;letter-spacing:.08em;color:#a9a1d6;margin:14px 0 6px}
+select,input,button{width:100%;font:inherit;font-size:17px;color:#fff;border-radius:16px;padding:14px 16px;border:2px solid rgba(255,255,255,.16);background:rgba(255,255,255,.09);outline:none}
+select option{color:#000}input:focus,select:focus{border-color:#22d3ee}
+button{margin-top:20px;border:0;font-weight:800;background:linear-gradient(90deg,#34d399,#22d3ee);color:#052e22;cursor:pointer}
+#msg{margin-top:14px;font-weight:700;min-height:22px}
+</style></head><body><div class="card">
+<h2>Wi-Fi setup</h2><p>Pick your home network so the karaoke box can go online.</p>
+<label for="ssid">NETWORK</label><select id="ssid">__SSID_OPTIONS__</select>
+<label for="pass">PASSWORD</label><input type="password" id="pass" placeholder="Wi-Fi password" autocomplete="off">
+<button id="go">Connect</button><div id="msg"></div></div>
+<script>
+const PIN=new URLSearchParams(location.search).get('pin')||'';
+document.getElementById('go').addEventListener('click',async()=>{
+ const s=document.getElementById('ssid').value,p=document.getElementById('pass').value,m=document.getElementById('msg');
+ if(!s){m.textContent='Please pick a network';return}
+ m.textContent='Connecting\u2026 this phone may lose the hotspot for a moment.';
+ let u='/wifi?ssid='+encodeURIComponent(s)+'&password='+encodeURIComponent(p)+(PIN?'&pin='+encodeURIComponent(PIN):'');
+ try{const d=await (await fetch(u)).json();m.textContent=d.msg||d.error}catch(e){m.textContent='Applied. If the hotspot disappeared, the box is joining your Wi-Fi.'}
+ // The phone usually drops off the hotspot mid-request; if it is still reachable, report the real outcome.
+ for(let i=0;i<20;i++){await new Promise(r=>setTimeout(r,2000));
+  try{const s=await (await fetch('/wifi/status')).json();
+   if(s.status==='ok'){m.textContent='Connected to '+s.ssid+'. Reconnect your phone to your normal Wi-Fi.';return}
+   if(s.status==='error'){m.textContent='Could not join '+s.ssid+'. Check the password and try again.';return}}catch(e){}}
+});
+</script></body></html>"""
 
 
 class RemoteBridgeSignals(QObject):
@@ -454,6 +705,7 @@ class RemoteBridgeSignals(QObject):
     adjust_key = pyqtSignal(int)
     adjust_tempo = pyqtSignal(float)
     skip_song = pyqtSignal()
+    toggle_pause = pyqtSignal()
     adjust_mic_vol = pyqtSignal(int)
     adjust_music_vol = pyqtSignal(int)
 
@@ -473,109 +725,73 @@ class RemoteRequestHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(json.dumps(data).encode("utf-8"))
 
+    def send_html(self, page, code=200):
+        body = page.encode("utf-8")
+        self.send_response(code)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
     def do_GET(self):
         parsed = urllib.parse.urlparse(self.path)
         path = parsed.path
         params = urllib.parse.parse_qs(parsed.query)
 
-        if self.pin:
-            req_pin = params.get("pin", [""])[0]
-            if req_pin != self.pin:
-                self.send_json({"error": "Unauthorized / Invalid PIN"}, 401)
-                return
+        app = self.app_instance
+
+        # REMOTE_PIN gates the player API. First-time Wi-Fi setup (/wifi, /setup, status polling) stays open
+        # only while the box is in hotspot mode, so a phone that just scanned the QR code can configure it.
+        setup_paths = ("/wifi", "/setup", "/wifi/status", "/api/wifi-status")
+        setup_open = path in setup_paths and bool(app and getattr(app, "net_ap", False))
+        if self.pin and not setup_open and params.get("pin", [""])[0] != self.pin:
+            self.send_json({"error": "Unauthorized / Invalid PIN"}, 401)
+            return
 
         if path == "/":
-            self.send_response(200)
-            self.send_header("Content-Type", "text/html; charset=utf-8")
-            self.end_headers()
-            html = """<!DOCTYPE html><html><head><meta name="viewport" content="width=device-width, initial-scale=1">
-<title>KatoyOS Remote</title><style>
-body { font-family: sans-serif; background: #0f172a; color: white; padding: 15px; margin: 0; }
-h2 { color: #00d2ff; text-align: center; }
-input, button { width: 100%; padding: 12px; margin: 6px 0; border-radius: 8px; border: none; font-size: 16px; box-sizing: border-box; }
-input { background: #1e293b; color: white; border: 1px solid #334155; }
-button { background: #6366f1; color: white; font-weight: bold; cursor: pointer; }
-.btn-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
-.card { background: #181d2a; padding: 12px; border-radius: 8px; margin-bottom: 12px; }
-</style></head><body>
-<h2>🎤 KatoyOS Remote</h2>
-<div class="card">
-  <input id="q" placeholder="Enter Song Code or Title..." onkeyup="if(event.key==='Enter')search()">
-  <button onclick="search()">🔍 Search</button>
-</div>
-<div id="results"></div>
-<div class="card">
-  <h3>🎮 Controls</h3>
-  <div class="btn-grid">
-    <button onclick="act('/api/key?delta=-1')">KEY -</button>
-    <button onclick="act('/api/key?delta=1')">KEY +</button>
-    <button onclick="act('/api/tempo?delta=-0.05')">TEMPO -</button>
-    <button onclick="act('/api/tempo?delta=0.05')">TEMPO +</button>
-    <button onclick="act('/api/skip')">⏭ SKIP</button>
-    <button onclick="loadQueue()">📋 QUEUE</button>
-  </div>
-</div>
-<div id="queue_box" class="card"></div>
-<script>
-function search(){
-  let q=document.getElementById('q').value;
-  fetch('/api/search?q='+encodeURIComponent(q)).then(r=>r.json()).then(d=>{
-    let h='';
-    d.forEach(s=>{
-      h+=`<div style="border-bottom:1px solid #334155;padding:8px">
-        <b>[${s[0]}] ${s[1]}</b><br><small>${s[2]}</small><br>
-        <button onclick="res('${s[0]}','${encodeURIComponent(s[1])}','${encodeURIComponent(s[2])}','${encodeURIComponent(s[3])}')">📌 Reserve</button>
-      </div>`;
-    });
-    document.getElementById('results').innerHTML=h;
-  });
-}
-function res(c,t,a,f){
-  fetch(`/api/reserve?code=${c}&title=${t}&artist=${a}&filepath=${f}`).then(r=>r.json()).then(d=>alert(d.msg));
-}
-function act(url){ fetch(url).then(r=>r.json()); }
-function loadQueue(){
-  fetch('/api/queue').then(r=>r.json()).then(d=>{
-    let h='<b>Current Queue:</b><br>';
-    d.forEach((s,i)=>{ h+=`${i+1}. [${s[0]}] ${s[1]} - ${s[2]}<br>`; });
-    document.getElementById('queue_box').innerHTML=h;
-  });
-}
-</script></body></html>"""
-            self.wfile.write(html.encode("utf-8"))
+            self.send_html(REMOTE_HTML)
         elif path == "/api/search":
             q = params.get("q", [""])[0]
-            if self.app_instance and self.app_instance.db:
-                results = self.app_instance.db.search(q)
-                self.send_json(results)
-            else:
-                self.send_json([])
+            self.send_json(app.db.search(q) if (app and app.db) else [])
         elif path == "/api/reserve":
-            c = params.get("code", [""])[0]
-            t = urllib.parse.unquote(params.get("title", [""])[0])
-            a = urllib.parse.unquote(params.get("artist", [""])[0])
-            f = urllib.parse.unquote(params.get("filepath", [""])[0])
-            if c and f and self.bridge_signals:
-                self.bridge_signals.reserve_song.emit((c, t, a, f))
-                self.send_json({"status": "ok", "msg": f"Reserved: [{c}] {t}"})
+            # The phone only sends a song *code*; the file path always comes from our own index.
+            code = params.get("code", [""])[0].strip()
+            song = app.db.get_by_code(code) if (app and app.db and code) else None
+            if song and self.bridge_signals:
+                self.bridge_signals.reserve_song.emit(tuple(song))
+                self.send_json({"status": "ok", "msg": f"Reserved: [{song[0]}] {song[1]}"})
             else:
-                self.send_json({"error": "Invalid request"}, 400)
+                self.send_json({"error": "Unknown song code"}, 404)
         elif path == "/api/queue":
-            q_list = self.app_instance.reservation_queue if self.app_instance else []
-            self.send_json(q_list)
-        elif path == "/api/key":
-            d = int(params.get("delta", ["0"])[0])
+            self.send_json([list(s[:3]) for s in list(app.reservation_queue)] if app else [])
+        elif path == "/api/state":
+            cur = app.current_song if app else None
+            self.send_json({
+                "playing": bool(app and app.is_playing),
+                "paused": bool(app and app.is_paused),
+                "code": cur[0] if cur else "",
+                "title": cur[1] if cur else "",
+                "artist": cur[2] if cur else "",
+                "key": app.pitch_key if app else 0,
+                "tempo": int(round(app.tempo_multiplier * 100)) if app else 100,
+                "queue": [list(s[:3]) for s in list(app.reservation_queue)] if app else [],
+            })
+        elif path in ("/api/key", "/api/tempo"):
+            try:
+                d = int(params.get("delta", ["0"])[0]) if path == "/api/key" else float(params.get("delta", ["0"])[0])
+            except ValueError:
+                self.send_json({"error": "Bad delta"}, 400)
+                return
             if self.bridge_signals:
-                self.bridge_signals.adjust_key.emit(d)
-            self.send_json({"status": "ok"})
-        elif path == "/api/tempo":
-            d = float(params.get("delta", ["0.0"])[0])
-            if self.bridge_signals:
-                self.bridge_signals.adjust_tempo.emit(d)
+                (self.bridge_signals.adjust_key if path == "/api/key" else self.bridge_signals.adjust_tempo).emit(d)
             self.send_json({"status": "ok"})
         elif path == "/api/skip":
             if self.bridge_signals:
                 self.bridge_signals.skip_song.emit()
+            self.send_json({"status": "ok"})
+        elif path == "/api/pause":
+            if self.bridge_signals:
+                self.bridge_signals.toggle_pause.emit()
             self.send_json({"status": "ok"})
         elif path in ("/wifi/status", "/api/wifi-status"):
             status_file = Path("/tmp/katoy-wifi-status.json")
@@ -600,7 +816,7 @@ function loadQueue(){
                 except Exception as e:
                     self.send_json({"error": f"Failed to connect: {e}"}, 500)
             else:
-                # GET /wifi: Serve HTML setup page with SSID scan
+                # GET /wifi: serve the setup page with an SSID scan
                 wifi_out = ""
                 if shutil.which("nmcli"):
                     try:
@@ -609,38 +825,9 @@ function loadQueue(){
                     except Exception:
                         pass
                 ssids = parse_nmcli_wifi_list(wifi_out)
-                ssid_opts = "".join(f"<option value='{s}'>{s}</option>" for s in ssids) if ssids else "<option value=''>No networks found</option>"
-
-                self.send_response(200)
-                self.send_header("Content-Type", "text/html; charset=utf-8")
-                self.end_headers()
-                html = f"""<!DOCTYPE html><html><head><meta name="viewport" content="width=device-width, initial-scale=1">
-<title>KatoyOS Wi-Fi Onboarding</title><style>
-body {{ font-family: sans-serif; background: #0f172a; color: white; padding: 20px; margin: 0; }}
-h2 {{ color: #00d2ff; text-align: center; }}
-select, input, button {{ width: 100%; padding: 14px; margin: 8px 0; border-radius: 8px; border: none; font-size: 16px; box-sizing: border-box; }}
-select, input {{ background: #1e293b; color: white; border: 1px solid #334155; }}
-button {{ background: #10b981; color: white; font-weight: bold; cursor: pointer; margin-top: 15px; }}
-.card {{ background: #181d2a; padding: 20px; border-radius: 12px; max-width: 400px; margin: auto; }}
-</style></head><body>
-<div class="card">
-  <h2>📶 KatoyOS Wi-Fi Setup</h2>
-  <p>Select your home Wi-Fi network and enter the password:</p>
-  <label>Wi-Fi Network (SSID):</label>
-  <select id="ssid">{ssid_opts}</select>
-  <label>Password:</label>
-  <input type="password" id="pass" placeholder="Enter Wi-Fi Password">
-  <button onclick="save()">🔌 Connect Wi-Fi</button>
-</div>
-<script>
-function save(){{
-  let s=document.getElementById('ssid').value;
-  let p=document.getElementById('pass').value;
-  if(!s){{ alert('Please select an SSID'); return; }}
-  fetch(`/wifi?ssid=${{encodeURIComponent(s)}}&password=${{encodeURIComponent(p)}}`).then(r=>r.json()).then(d=>alert(d.msg||d.error));
-}}
-</script></body></html>"""
-                self.wfile.write(html.encode("utf-8"))
+                opts = "".join(f"<option value='{html.escape(s, quote=True)}'>{html.escape(s)}</option>" for s in ssids) \
+                    if ssids else "<option value=''>No networks found</option>"
+                self.send_html(WIFI_HTML.replace("__SSID_OPTIONS__", opts))
         else:
             self.send_json({"error": "Not Found"}, 404)
 
@@ -664,7 +851,9 @@ class RemoteWebServer(QThread):
         handler_class.bridge_signals = self.bridge_signals
         handler_class.pin = self.pin
 
-        bind_ip = get_local_ip()
+        # Bind every interface: at boot we usually start before Wi-Fi has an address (and the setup
+        # hotspot appears later still), so binding to the IP present *now* would strand the phone remote.
+        bind_ip = "0.0.0.0"
         try:
             self.httpd = ThreadedHTTPServer((bind_ip, self.port), handler_class)
             print(f"Phone remote web server listening on {bind_ip}:{self.port}")
@@ -1071,7 +1260,9 @@ def extract_midi_lyrics_and_duration(filepath):
 class SongDatabase:
     def __init__(self, db_path):
         self.db_path = db_path
-        self.conn = sqlite3.connect(db_path)
+        # The phone remote queries from HTTP worker threads, so allow cross-thread use and serialise access.
+        self.conn = sqlite3.connect(db_path, check_same_thread=False)
+        self._lock = threading.RLock()
         self.create_tables()
 
     def create_tables(self):
@@ -1187,32 +1378,710 @@ class SongDatabase:
         return len(audio_files)
 
     def search(self, query=""):
-        cur = self.conn.cursor()
-        if not query.strip():
-            cur.execute("SELECT code, title, artist, filepath FROM songs ORDER BY code ASC LIMIT 1000")
-        else:
-            q = f"%{query.strip()}%"
-            cur.execute("""
-                SELECT code, title, artist, filepath FROM songs
-                WHERE code LIKE ? OR title LIKE ? OR artist LIKE ? OR filepath LIKE ?
-                ORDER BY code ASC LIMIT 1000
-            """, (q, q, q, q))
-        return cur.fetchall()
+        with self._lock:
+            cur = self.conn.cursor()
+            if not query.strip():
+                cur.execute("SELECT code, title, artist, filepath FROM songs ORDER BY code ASC LIMIT 1000")
+            else:
+                q = f"%{query.strip()}%"
+                cur.execute("""
+                    SELECT code, title, artist, filepath FROM songs
+                    WHERE code LIKE ? OR title LIKE ? OR artist LIKE ? OR filepath LIKE ?
+                    ORDER BY code ASC LIMIT 1000
+                """, (q, q, q, q))
+            return cur.fetchall()
 
     def get_by_code(self, code_str):
-        cur = self.conn.cursor()
-        c = code_str.zfill(5)
-        cur.execute("SELECT code, title, artist, filepath FROM songs WHERE code = ? LIMIT 1", (c,))
-        return cur.fetchone()
+        with self._lock:
+            cur = self.conn.cursor()
+            c = code_str.zfill(5)
+            cur.execute("SELECT code, title, artist, filepath FROM songs WHERE code = ? LIMIT 1", (c,))
+            return cur.fetchone()
 
     def close(self):
         self.conn.close()
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  "Neon Videoke" design system
+#  Everything is drawn with QPainter / QSS so the UI needs no emoji font, no
+#  OpenGL and no QGraphicsEffects (all too slow or unreliable on a Pi 3B).
+#  Heavy visuals (backdrop, lyric outlines) are rendered once into cached
+#  pixmaps and merely blitted per frame.
+# ══════════════════════════════════════════════════════════════════════════════
+
+UI_SCALE = [1.0]  # set from the screen height in apply_theme()
+
+
+def S(n):
+    """Scale a 1080p design pixel to the real screen."""
+    return max(1, int(round(n * UI_SCALE[0])))
+
+
+def ui_font(px, weight=QFont.Weight.Normal, spacing=0.0):
+    f = QFont()
+    f.setFamilies(["Inter", "Noto Sans", "DejaVu Sans", "Sans Serif"])
+    f.setPixelSize(S(px))
+    f.setWeight(weight)
+    if spacing:
+        f.setLetterSpacing(QFont.SpacingType.AbsoluteSpacing, spacing)
+    return f
+
+
+COL_PINK = QColor("#ff2e93")
+COL_VIOLET = QColor("#8b3cf0")
+COL_CYAN = QColor("#22d3ee")
+COL_GOLD = QColor("#ffd166")
+COL_MINT = QColor("#34d399")
+COL_TEXT = QColor("#f5f3ff")
+COL_MUTED = QColor("#a9a1d6")
+COL_BG_TOP = QColor("#0a061f")
+COL_BG_BOTTOM = QColor("#1c0f4a")
+
+
+def build_qss():
+    s = S
+    return f"""
+* {{ font-family: "Inter", "Noto Sans", "DejaVu Sans", sans-serif; color: #f5f3ff; }}
+QLabel {{ background: transparent; }}
+QToolTip {{ background: #1c0f4a; color: white; border: 1px solid #8b3cf0; padding: {s(6)}px; }}
+QMessageBox, QDialog {{ background: #170d3d; }}
+QMessageBox QLabel {{ font-size: {s(20)}px; }}
+
+QFrame#card {{ background: rgba(255,255,255,7%); border: 1px solid rgba(255,255,255,13%); border-radius: {s(26)}px; }}
+QFrame#strip {{ background: rgba(10,6,31,66%); border: 1px solid rgba(255,255,255,12%); border-radius: {s(24)}px; }}
+QFrame#controls {{ background: rgba(10,6,31,66%); border: 1px solid rgba(255,255,255,12%); border-radius: {s(30)}px; }}
+QFrame#scoreCard {{ background: rgba(10,6,31,80%); border: 2px solid rgba(255,209,102,70%); border-radius: {s(40)}px; }}
+QLabel#toast {{ background: rgba(10,6,31,92%); border: 1px solid rgba(255,46,147,70%); border-radius: {s(22)}px; padding: {s(14)}px {s(28)}px; font-size: {s(20)}px; font-weight: 600; }}
+
+QLabel[role="muted"] {{ color: #a9a1d6; }}
+QLabel[role="code"] {{ color: #1a0f3a; background: #ffd166; border-radius: {s(16)}px; padding: {s(6)}px {s(18)}px; font-weight: 800; }}
+QLabel[role="chip"] {{ background: rgba(255,255,255,10%); border: 1px solid rgba(255,255,255,16%); border-radius: {s(18)}px; padding: {s(7)}px {s(18)}px; font-weight: 700; }}
+QLabel[role="chip"][tone="gold"] {{ color: #ffd166; }}
+QLabel[role="chip"][tone="cyan"] {{ color: #67e8f9; }}
+QLabel[role="count"] {{ background: rgba(255,46,147,22%); border: 1px solid rgba(255,46,147,60%); border-radius: {s(12)}px; padding: {s(3)}px {s(14)}px; font-weight: 800; color: #ff8cc4; }}
+QLabel[role="kbd"] {{ background: rgba(255,255,255,12%); border: 1px solid rgba(255,255,255,20%); border-bottom: 3px solid rgba(255,255,255,24%); border-radius: {s(9)}px; padding: {s(2)}px {s(10)}px; font-weight: 800; color: #ffd166; }}
+QLabel[role="nextup"] {{ background: rgba(52,211,153,14%); border: 1px solid rgba(52,211,153,55%); border-radius: {s(20)}px; padding: {s(9)}px {s(20)}px; }}
+
+QPushButton {{ background: rgba(255,255,255,11%); border: 1px solid rgba(255,255,255,18%); border-radius: {s(18)}px; padding: {s(11)}px {s(24)}px; font-size: {s(19)}px; font-weight: 700; }}
+QPushButton:hover {{ background: rgba(255,255,255,20%); }}
+QPushButton:pressed {{ background: rgba(255,255,255,6%); }}
+QPushButton:focus {{ border: 2px solid #22d3ee; }}
+QPushButton:disabled {{ color: rgba(255,255,255,35%); }}
+QPushButton[variant="primary"] {{ border: none; background: qlineargradient(x1:0,y1:0,x2:1,y2:0, stop:0 #ff2e93, stop:1 #8b3cf0); }}
+QPushButton[variant="primary"]:hover {{ background: qlineargradient(x1:0,y1:0,x2:1,y2:0, stop:0 #ff5aab, stop:1 #a15bff); }}
+QPushButton[variant="primary"]:focus {{ border: 2px solid #ffffff; }}
+QPushButton[variant="mint"] {{ border: none; color: #052e22; background: qlineargradient(x1:0,y1:0,x2:1,y2:0, stop:0 #34d399, stop:1 #22d3ee); }}
+QPushButton[variant="mint"]:hover {{ background: qlineargradient(x1:0,y1:0,x2:1,y2:0, stop:0 #5eead4, stop:1 #67e8f9); }}
+QPushButton[variant="round"] {{ border-radius: {s(36)}px; padding: 0; min-width: {s(72)}px; max-width: {s(72)}px; min-height: {s(72)}px; max-height: {s(72)}px; }}
+QPushButton[variant="icon"] {{ border-radius: {s(26)}px; padding: 0; min-width: {s(52)}px; max-width: {s(52)}px; min-height: {s(52)}px; max-height: {s(52)}px; }}
+QPushButton[variant="seg"] {{ border-radius: {s(16)}px; padding: {s(9)}px {s(26)}px; }}
+QPushButton[variant="seg"]:checked {{ border: none; background: qlineargradient(x1:0,y1:0,x2:1,y2:0, stop:0 #ff2e93, stop:1 #8b3cf0); }}
+
+QLineEdit {{ background: rgba(255,255,255,9%); border: 2px solid rgba(255,255,255,16%); border-radius: {s(30)}px; padding: 0 {s(24)}px 0 {s(64)}px; font-size: {s(23)}px; selection-background-color: #ff2e93; }}
+QLineEdit:focus {{ border: 2px solid #22d3ee; background: rgba(255,255,255,13%); }}
+
+QTableWidget, QListWidget {{ background: transparent; border: none; outline: 0; selection-background-color: transparent; }}
+QScrollBar:vertical {{ background: transparent; width: {s(12)}px; margin: {s(6)}px 0; }}
+QScrollBar::handle:vertical {{ background: rgba(255,255,255,26%); border-radius: {s(5)}px; min-height: {s(44)}px; }}
+QScrollBar::handle:vertical:hover {{ background: rgba(255,255,255,42%); }}
+QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{ height: 0; }}
+QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {{ background: transparent; }}
+
+QProgressBar {{ background: rgba(255,255,255,16%); border: none; border-radius: {s(5)}px; min-height: {s(10)}px; max-height: {s(10)}px; }}
+QProgressBar::chunk {{ border-radius: {s(5)}px; background: qlineargradient(x1:0,y1:0,x2:1,y2:0, stop:0 #ff2e93, stop:0.6 #8b3cf0, stop:1 #22d3ee); }}
+
+QSlider {{ min-height: {s(36)}px; }}
+QSlider::groove:horizontal {{ height: {s(12)}px; background: rgba(255,255,255,15%); border-radius: {s(6)}px; }}
+QSlider::sub-page:horizontal {{ background: qlineargradient(x1:0,y1:0,x2:1,y2:0, stop:0 #ff2e93, stop:1 #22d3ee); border-radius: {s(6)}px; }}
+QSlider::handle:horizontal {{ width: {s(30)}px; height: {s(30)}px; margin: -{s(9)}px 0; border-radius: {s(15)}px; background: #ffffff; }}
+QSlider:focus::handle:horizontal {{ background: #22d3ee; }}
+"""
+
+
+def apply_theme(app, screen_height=None):
+    """Install palette, base font and stylesheet. Call once before building any widget."""
+    h = screen_height
+    if h is None:
+        scr = app.primaryScreen()
+        h = scr.size().height() if scr else 1080
+    UI_SCALE[0] = max(0.6, min(1.5, h / 1080.0))
+    app.setFont(ui_font(18))
+    pal = app.palette()
+    pal.setColor(QPalette.ColorRole.Window, COL_BG_TOP)
+    pal.setColor(QPalette.ColorRole.WindowText, COL_TEXT)
+    pal.setColor(QPalette.ColorRole.Text, COL_TEXT)
+    pal.setColor(QPalette.ColorRole.Base, QColor(20, 12, 50))
+    pal.setColor(QPalette.ColorRole.PlaceholderText, QColor(169, 161, 214, 150))
+    app.setPalette(pal)
+    app.setStyleSheet(build_qss())
+
+
+# ── Vector icons (no icon theme / emoji font dependency) ──────────────────────
+def make_icon(kind, color="#ffffff", size=64):
+    pm = QPixmap(size, size)
+    pm.fill(Qt.GlobalColor.transparent)
+    p = QPainter(pm)
+    p.setRenderHint(QPainter.RenderHint.Antialiasing)
+    col = QColor(color)
+    s = float(size)
+    p.setPen(QPen(col, s * 0.085, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin))
+    p.setBrush(Qt.BrushStyle.NoBrush)
+
+    def P(x, y):
+        return QPointF(x * s, y * s)
+
+    def line(x1, y1, x2, y2):
+        p.drawLine(P(x1, y1), P(x2, y2))
+
+    def poly(*pts):
+        p.drawPolygon(QPolygonF([P(x, y) for x, y in pts]))
+
+    if kind == "play":
+        p.setBrush(col)
+        poly((.33, .20), (.33, .80), (.80, .50))
+    elif kind == "pause":
+        p.setBrush(col)
+        p.drawRoundedRect(QRectF(.27 * s, .20 * s, .17 * s, .60 * s), .05 * s, .05 * s)
+        p.drawRoundedRect(QRectF(.56 * s, .20 * s, .17 * s, .60 * s), .05 * s, .05 * s)
+    elif kind == "next":
+        p.setBrush(col)
+        poly((.24, .22), (.24, .78), (.66, .50))
+        line(.76, .22, .76, .78)
+    elif kind == "back":
+        line(.78, .50, .24, .50)
+        p.drawPolyline(QPolygonF([P(.46, .26), P(.22, .50), P(.46, .74)]))
+    elif kind == "gear":
+        p.drawEllipse(P(.5, .5), s * .15, s * .15)
+        p.drawEllipse(P(.5, .5), s * .29, s * .29)
+        for i in range(8):
+            a = i * math.pi / 4
+            line(.5 + .31 * math.cos(a), .5 + .31 * math.sin(a), .5 + .41 * math.cos(a), .5 + .41 * math.sin(a))
+    elif kind == "refresh":
+        p.drawArc(QRectF(.2 * s, .2 * s, .6 * s, .6 * s), 30 * 16, 290 * 16)
+        p.setBrush(col)
+        poly((.80, .16), (.82, .46), (.54, .36))
+    elif kind == "mic":
+        p.setBrush(col)
+        p.drawRoundedRect(QRectF(.38 * s, .10 * s, .24 * s, .44 * s), .12 * s, .12 * s)
+        p.setBrush(Qt.BrushStyle.NoBrush)
+        p.drawArc(QRectF(.26 * s, .26 * s, .48 * s, .44 * s), 180 * 16, 180 * 16)
+        line(.5, .70, .5, .86)
+        line(.36, .87, .64, .87)
+    elif kind == "search":
+        p.drawEllipse(P(.44, .44), s * .22, s * .22)
+        line(.61, .61, .82, .82)
+    elif kind == "queue":
+        line(.20, .28, .80, .28)
+        line(.20, .50, .62, .50)
+        line(.20, .72, .50, .72)
+        p.setBrush(col)
+        poly((.68, .60), (.68, .84), (.86, .72))
+    elif kind == "plus":
+        line(.5, .22, .5, .78)
+        line(.22, .5, .78, .5)
+    elif kind == "minus":
+        line(.22, .5, .78, .5)
+    elif kind == "up":
+        p.drawPolyline(QPolygonF([P(.24, .62), P(.50, .36), P(.76, .62)]))
+    elif kind == "down":
+        p.drawPolyline(QPolygonF([P(.24, .38), P(.50, .64), P(.76, .38)]))
+    elif kind == "note":
+        p.setBrush(col)
+        p.drawEllipse(P(.34, .72), s * .15, s * .11)
+        line(.47, .70, .47, .18)
+        line(.47, .18, .78, .30)
+    elif kind == "bookmark":
+        p.setBrush(col)
+        poly((.30, .14), (.70, .14), (.70, .86), (.50, .68), (.30, .86))
+    elif kind == "close":
+        line(.26, .26, .74, .74)
+        line(.74, .26, .26, .74)
+    p.end()
+    return QIcon(pm)
+
+
+def badge_pixmap(kind, size):
+    """Gradient rounded-square app badge with a white icon (header logo)."""
+    pm = QPixmap(size, size)
+    pm.fill(Qt.GlobalColor.transparent)
+    p = QPainter(pm)
+    p.setRenderHint(QPainter.RenderHint.Antialiasing)
+    g = QLinearGradient(0, 0, size, size)
+    g.setColorAt(0, COL_PINK)
+    g.setColorAt(1, COL_VIOLET)
+    p.setBrush(QBrush(g))
+    p.setPen(Qt.PenStyle.NoPen)
+    p.drawRoundedRect(QRectF(0, 0, size, size), size * .30, size * .30)
+    ic = make_icon(kind, "#ffffff", int(size * .62)).pixmap(int(size * .62), int(size * .62))
+    o = (size - ic.width()) // 2
+    p.drawPixmap(o, o, ic)
+    p.end()
+    return pm
+
+
+# ── Small custom widgets ──────────────────────────────────────────────────────
+class GradientLabel(QWidget):
+    """Text filled with a horizontal gradient (QLabel can't do that)."""
+
+    def __init__(self, text="", px=48, weight=QFont.Weight.ExtraBold, colors=(COL_PINK, COL_GOLD),
+                 align=Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, parent=None):
+        super().__init__(parent)
+        self._text = text
+        self._colors = colors
+        self._align = align
+        self.setFont(ui_font(px, weight))
+        self.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
+
+    def setText(self, text):
+        self._text = text
+        self.updateGeometry()
+        self.update()
+
+    def sizeHint(self):
+        r = QFontMetrics(self.font()).boundingRect(QRect(0, 0, 10000, 10000), 0, self._text)
+        return QSize(r.width() + S(8), r.height() + S(8))
+
+    def minimumSizeHint(self):
+        return self.sizeHint()
+
+    def paintEvent(self, ev):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.TextAntialiasing)
+        g = QLinearGradient(0, 0, max(1, self.sizeHint().width()), 0)
+        g.setColorAt(0, self._colors[0])
+        g.setColorAt(1, self._colors[1])
+        p.setPen(QPen(QBrush(g), 1))
+        p.setFont(self.font())
+        p.drawText(self.rect(), int(self._align.value if hasattr(self._align, "value") else self._align), self._text)
+
+
+class EqualizerWidget(QWidget):
+    """Decorative animated equalizer. Animates only while visible (cheap, small area)."""
+
+    def __init__(self, bars=20, parent=None):
+        super().__init__(parent)
+        self._bars = bars
+        self._t = 0.0
+        self._timer = QTimer(self)
+        self._timer.setInterval(70)
+        self._timer.timeout.connect(self._tick)
+        self.setMinimumHeight(S(84))
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+
+    def showEvent(self, ev):
+        self._timer.start()
+        super().showEvent(ev)
+
+    def hideEvent(self, ev):
+        self._timer.stop()
+        super().hideEvent(ev)
+
+    def _tick(self):
+        self._t += 0.11
+        self.update()
+
+    def paintEvent(self, ev):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        p.setPen(Qt.PenStyle.NoPen)
+        w, h = self.width(), self.height()
+        n = self._bars
+        gap = S(8)
+        bw = max(2.0, (w - gap * (n - 1)) / n)
+        for i in range(n):
+            amp = 0.20 + 0.80 * abs(math.sin(self._t * (1.2 + 0.19 * (i % 7)) + i * 0.83))
+            bh = max(float(S(8)), amp * h)
+            f = i / max(1, n - 1)
+            if f < 0.5:
+                c = self._mix(COL_PINK, COL_VIOLET, f * 2)
+            else:
+                c = self._mix(COL_VIOLET, COL_CYAN, (f - 0.5) * 2)
+            p.setBrush(c)
+            p.drawRoundedRect(QRectF(i * (bw + gap), h - bh, bw, bh), bw / 2, bw / 2)
+
+    @staticmethod
+    def _mix(a, b, t):
+        return QColor(int(a.red() + (b.red() - a.red()) * t),
+                      int(a.green() + (b.green() - a.green()) * t),
+                      int(a.blue() + (b.blue() - a.blue()) * t))
+
+
+class QrTile(QWidget):
+    """White rounded tile with a QR code and a caption underneath."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(S(10))
+        lay.setAlignment(Qt.AlignmentFlag.AlignHCenter)
+        self.img = QLabel()
+        self.img.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.cap = QLabel("")
+        self.cap.setProperty("role", "muted")
+        self.cap.setFont(ui_font(17, QFont.Weight.DemiBold))
+        self.cap.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        lay.addWidget(self.img, 0, Qt.AlignmentFlag.AlignHCenter)
+        lay.addWidget(self.cap)
+
+    def set_qr(self, text, caption, size_px):
+        self.img.setPixmap(create_qr_pixmap(text, target_px=S(size_px)))
+        self.cap.setText(caption)
+
+
+class LyricLineWidget(QWidget):
+    """One lyric line with a karaoke 'wipe' fill and dark outline.
+
+    The outlined text is rendered ONCE per line into two pixmaps (white / sung
+    gradient); each animation frame only blits them, so even 20 fps costs almost
+    nothing on a Pi 3B. Font size auto-shrinks so a line never overflows the screen.
+    """
+
+    def __init__(self, px, mode="current", parent=None):
+        super().__init__(parent)
+        self.base_px = px
+        self.mode = mode  # "current" (wipe) or "dim"
+        self._segs = []   # (text, start_sec, end_sec)
+        self._edges = []
+        self._wipe = 0.0
+        self._pix_base = None
+        self._pix_sung = None
+        self._dirty = True
+        h = S(px) * 1.55
+        self.setFixedHeight(int(h))
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+
+    # public API ---------------------------------------------------------------
+    def set_text(self, text):
+        self.set_syllables([(text, 0.0, 0.0)] if text else [])
+
+    def set_syllables(self, segs):
+        self._segs = list(segs)
+        self._wipe = 0.0
+        self._dirty = True
+        self.update()
+
+    def set_elapsed(self, t):
+        if self.mode != "current":
+            return
+        if self._dirty and self.width() > 20:
+            self._rebuild()
+        if not self._edges:
+            return
+        wipe = self._edges[0][0]
+        for (x0, x1), (_, st, en) in zip(self._edges, self._segs):
+            if t >= en:
+                wipe = x1
+            elif t >= st:
+                wipe = x0 + (x1 - x0) * ((t - st) / max(0.05, en - st))
+                break
+            else:
+                break
+        if abs(wipe - self._wipe) >= 1.0:
+            self._wipe = wipe
+            self.update()
+
+    def _reset_wipe(self):
+        self._wipe = 0.0
+
+    # internals ----------------------------------------------------------------
+    def resizeEvent(self, ev):
+        self._dirty = True
+        super().resizeEvent(ev)
+
+    def _rebuild(self):
+        self._dirty = False
+        self._pix_base = self._pix_sung = None
+        self._edges = []
+        w, h = self.width(), self.height()
+        if not self._segs or w < 20:
+            return
+        full = "".join(t for t, _, _ in self._segs)
+        px = S(self.base_px)
+        min_px = max(14, int(px * 0.25))
+        avail = w - S(60)
+        while True:
+            font = ui_font(1, QFont.Weight.ExtraBold if self.mode == "current" else QFont.Weight.Bold)
+            font.setPixelSize(px)
+            fm = QFontMetricsF(font)
+            total = fm.horizontalAdvance(full)
+            if total <= avail or px <= min_px:
+                break
+            px -= 2
+        x = (w - total) / 2.0
+        base = (h + fm.ascent() - fm.descent()) / 2.0
+        path = QPainterPath()
+        for text, _, _ in self._segs:
+            sw = fm.horizontalAdvance(text)
+            path.addText(QPointF(x, base), font, text)
+            self._edges.append((x, x + sw))
+            x += sw
+
+        outline_w = max(3.0, px * 0.12) if self.mode == "current" else max(2.0, px * 0.07)
+        pen = QPen(QColor(8, 4, 24, 235), outline_w, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin)
+
+        def render(brush):
+            pm = QPixmap(w, h)
+            pm.fill(Qt.GlobalColor.transparent)
+            pp = QPainter(pm)
+            pp.setRenderHint(QPainter.RenderHint.Antialiasing)
+            pp.strokePath(path, pen)
+            pp.fillPath(path, brush)
+            pp.end()
+            return pm
+
+        if self.mode == "current":
+            self._pix_base = render(QBrush(QColor(255, 255, 255)))
+            g = QLinearGradient(0, base - px, 0, base + px * 0.25)
+            g.setColorAt(0, QColor(255, 232, 130))
+            g.setColorAt(1, QColor(255, 61, 143))
+            self._pix_sung = render(QBrush(g))
+        else:
+            self._pix_base = render(QBrush(QColor(255, 255, 255, 150)))
+
+    def paintEvent(self, ev):
+        if self._dirty:
+            self._rebuild()
+        if not self._pix_base:
+            return
+        p = QPainter(self)
+        p.drawPixmap(0, 0, self._pix_base)
+        if self._pix_sung is not None and self._wipe > 0:
+            wx = int(min(self.width(), self._wipe))
+            if wx > 0:
+                p.drawPixmap(0, 0, self._pix_sung, 0, 0, wx, self.height())
+
+
+class SongRowDelegate(QStyledItemDelegate):
+    """Paints the 3-column song table as rounded 'cards' with a gradient selection bar."""
+
+    RAD = 18
+
+    def sizeHint(self, option, index):
+        return QSize(option.rect.width(), S(66))
+
+    def _row_path(self, rect, col, last):
+        rad = S(self.RAD)
+        rr = QRectF(rect)
+        if col == 0:
+            rr.setRight(rr.right() + rad * 2)
+        if col == last:
+            rr.setLeft(rr.left() - rad * 2)
+        if 0 < col < last:
+            rr.adjust(-rad * 2, 0, rad * 2, 0)
+        path = QPainterPath()
+        path.addRoundedRect(rr, rad, rad)
+        return path
+
+    def paint(self, painter, option, index):
+        painter.save()
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setRenderHint(QPainter.RenderHint.TextAntialiasing)
+        col = index.column()
+        last = index.model().columnCount() - 1
+        rect = option.rect.adjusted(0, S(4), 0, -S(4))
+        selected = bool(option.state & QStyle.StateFlag.State_Selected)
+        hover = bool(option.state & QStyle.StateFlag.State_MouseOver)
+
+        painter.setClipRect(QRectF(rect))
+        path = self._row_path(rect, col, last)
+        if selected:
+            vw = option.widget.viewport().width() if option.widget else rect.right()
+            g = QLinearGradient(0, 0, vw, 0)
+            g.setColorAt(0, COL_PINK)
+            g.setColorAt(1, COL_VIOLET)
+            painter.fillPath(path, QBrush(g))
+        else:
+            painter.fillPath(path, QColor(255, 255, 255, 20 if hover else 10))
+
+        text = str(index.data() or "")
+        pad = S(22)
+        tr = rect.adjusted(pad, 0, -pad, 0)
+        if col == 0:
+            painter.setFont(ui_font(23, QFont.Weight.ExtraBold))
+            painter.setPen(QColor("#ffffff") if selected else COL_GOLD)
+        elif col == 1:
+            painter.setFont(ui_font(24, QFont.Weight.Bold))
+            painter.setPen(QColor("#ffffff"))
+        else:
+            painter.setFont(ui_font(20, QFont.Weight.Medium))
+            painter.setPen(QColor(255, 255, 255, 225) if selected else COL_MUTED)
+        el = QFontMetrics(painter.font()).elidedText(text, Qt.TextElideMode.ElideRight, tr.width())
+        painter.drawText(tr, int(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft), el)
+        painter.restore()
+
+
+class QueueRowDelegate(QStyledItemDelegate):
+    """Reservation queue rows: numbered gradient badge + title / artist."""
+
+    def sizeHint(self, option, index):
+        return QSize(option.rect.width(), S(82))
+
+    def paint(self, painter, option, index):
+        data = index.data(Qt.ItemDataRole.UserRole) or (0, "", "", "")
+        n, code, title, artist = data
+        painter.save()
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setRenderHint(QPainter.RenderHint.TextAntialiasing)
+        r = option.rect.adjusted(S(4), S(5), -S(4), -S(5))
+        selected = bool(option.state & QStyle.StateFlag.State_Selected)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QColor(255, 255, 255, 26 if selected else 12))
+        painter.drawRoundedRect(QRectF(r), S(18), S(18))
+
+        d = S(46)
+        bx, by = r.left() + S(14), r.top() + (r.height() - d) // 2
+        g = QLinearGradient(bx, by, bx + d, by + d)
+        g.setColorAt(0, COL_PINK if n > 1 else COL_MINT)
+        g.setColorAt(1, COL_VIOLET if n > 1 else COL_CYAN)
+        painter.setBrush(QBrush(g))
+        painter.drawEllipse(QRectF(bx, by, d, d))
+        painter.setPen(QColor("#ffffff") if n > 1 else QColor("#052e22"))
+        painter.setFont(ui_font(22, QFont.Weight.ExtraBold))
+        painter.drawText(QRectF(bx, by, d, d), int(Qt.AlignmentFlag.AlignCenter), str(n))
+
+        tx = bx + d + S(16)
+        tw = r.right() - tx - S(12)
+        painter.setFont(ui_font(21, QFont.Weight.Bold))
+        painter.setPen(QColor("#ffffff"))
+        el = QFontMetrics(painter.font()).elidedText(title, Qt.TextElideMode.ElideRight, tw)
+        painter.drawText(QRectF(tx, r.top() + S(8), tw, r.height() / 2), int(Qt.AlignmentFlag.AlignVCenter), el)
+        painter.setFont(ui_font(17, QFont.Weight.Medium))
+        painter.setPen(COL_MUTED)
+        sub = f"{code}  ·  {artist}"
+        el = QFontMetrics(painter.font()).elidedText(sub, Qt.TextElideMode.ElideRight, tw)
+        painter.drawText(QRectF(tx, r.top() + r.height() / 2 - S(2), tw, r.height() / 2 - S(6)), int(Qt.AlignmentFlag.AlignVCenter), el)
+        painter.restore()
+
+
+class EmptyAwareList(QListWidget):
+    """QListWidget that paints a friendly hint when it has no items."""
+
+    def __init__(self, hint, parent=None):
+        super().__init__(parent)
+        self._hint = hint
+
+    def paintEvent(self, ev):
+        super().paintEvent(ev)
+        if self.count() == 0:
+            p = QPainter(self.viewport())
+            p.setRenderHint(QPainter.RenderHint.TextAntialiasing)
+            p.setPen(QColor(169, 161, 214, 190))
+            p.setFont(ui_font(19, QFont.Weight.Medium))
+            p.drawText(self.viewport().rect().adjusted(S(20), 0, -S(20), 0),
+                       int(Qt.AlignmentFlag.AlignCenter) | int(Qt.TextFlag.TextWordWrap), self._hint)
+
+
+class ScoreCard(QFrame):
+    """End-of-song videoke score: big count-up number, stars, Tagalog praise."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setObjectName("scoreCard")
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(S(70), S(36), S(70), S(40))
+        lay.setSpacing(S(4))
+        lay.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        cap = QLabel("YOUR SCORE")
+        cap.setFont(ui_font(22, QFont.Weight.Bold, spacing=S(8)))
+        cap.setProperty("role", "muted")
+        cap.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.num = GradientLabel("0", 190, QFont.Weight.Black, (COL_GOLD, COL_PINK), Qt.AlignmentFlag.AlignCenter)
+        self.num.setMinimumWidth(S(520))
+        self.stars = QLabel("")
+        self.stars.setFont(ui_font(48, QFont.Weight.Bold))
+        self.stars.setStyleSheet("color: #ffd166;")
+        self.stars.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.praise = QLabel("")
+        self.praise.setFont(ui_font(36, QFont.Weight.ExtraBold))
+        self.praise.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        lay.addWidget(cap)
+        lay.addWidget(self.num, 0, Qt.AlignmentFlag.AlignHCenter)
+        lay.addWidget(self.stars)
+        lay.addWidget(self.praise)
+        self._target = 0
+        self._cur = 0
+        self._timer = QTimer(self)
+        self._timer.setInterval(30)
+        self._timer.timeout.connect(self._tick)
+
+    def show_result(self, score, praise):
+        self._target = int(score)
+        self._cur = 0
+        n = 5 if score >= 98 else 4 if score >= 94 else 3 if score >= 88 else 2 if score >= 78 else 1
+        self.stars.setText("★" * n + "☆" * (5 - n))
+        self.praise.setText(praise)
+        self.num.setText("0")
+        self._timer.start()
+
+    def _tick(self):
+        self._cur = min(self._target, self._cur + max(2, self._target // 28))
+        self.num.setText(str(self._cur))
+        if self._cur >= self._target:
+            self._timer.stop()
+
+
+class Toast(QLabel):
+    """Non-blocking message (replaces modal QMessageBox, which a phone remote can't dismiss)."""
+
+    def __init__(self, parent):
+        super().__init__(parent)
+        self.setObjectName("toast")
+        self.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.setWordWrap(True)
+        self.hide()
+        self._t = QTimer(self)
+        self._t.setSingleShot(True)
+        self._t.timeout.connect(self.hide)
+
+    def flash(self, msg, ms=4500):
+        self.setText(msg)
+        host = self.parentWidget()
+        w = min(host.width() - S(120), S(1100))
+        self.setFixedWidth(max(S(300), w))
+        self.adjustSize()
+        self.move((host.width() - self.width()) // 2, host.height() - self.height() - S(60))
+        self.show()
+        self.raise_()
+        self._t.start(ms)
+
+
+def kbd_chip(key, label):
+    """'[Enter] Play' style hint used in the footer."""
+    w = QWidget()
+    lay = QHBoxLayout(w)
+    lay.setContentsMargins(0, 0, 0, 0)
+    lay.setSpacing(S(8))
+    k = QLabel(key)
+    k.setProperty("role", "kbd")
+    k.setFont(ui_font(16, QFont.Weight.ExtraBold))
+    t = QLabel(label)
+    t.setProperty("role", "muted")
+    t.setFont(ui_font(16, QFont.Weight.Medium))
+    lay.addWidget(k)
+    lay.addWidget(t)
+    return w
+
+
+def styled_button(text="", variant=None, icon=None, font_px=19, icon_px=26):
+    b = QPushButton(text)
+    if variant:
+        b.setProperty("variant", variant)
+    if icon:
+        col = "#052e22" if variant == "mint" else "#ffffff"
+        b.setIcon(make_icon(icon, col, 64))
+        b.setIconSize(QSize(S(icon_px), S(icon_px)))
+    b.setFont(ui_font(font_px, QFont.Weight.Bold))
+    b.setCursor(Qt.CursorShape.PointingHandCursor)
+    return b
 
 
 class KaraokeApp(QWidget):
     def __init__(self, config):
         super().__init__()
         self.config = config
+        self.kiosk = config.get("KIOSK", "0") == "1"
         self.songs_dir = None
         self.db = None
         self.soundfont = None
@@ -1230,15 +2099,34 @@ class KaraokeApp(QWidget):
         self.is_playing = False
         self.lyrics_lines = []
         self.song_duration = 0.0
+        self.mic_energy_samples = []
+
+        self._grad_cache = None
+        self._cover_src = None
+        self._cover_cache = None
+        self._lyric_idx = -2
+        self.net_ip = ""
+        self.net_ap = False
+        self.net_ssid = ""
+        self.boot_info = ""
+        self.song_count = 0
+        self.indexer_worker = None
+        self.net_watcher = None
+        self.remote_server = None
+        self._audio_ready = False
+        self._audio_tries = 0
+
+        # Cheap object; the pactl calls happen later in _late_init().
+        # (Must exist before init_ui(): the settings page reads its values.)
+        self.mic_manager = MicrophoneChainManager(self.config)
 
         self.init_ui()
 
         self.poll_timer = QTimer(self)
         self.poll_timer.timeout.connect(self.check_usb_and_media)
-        self.poll_timer.start(2000)
 
         self.play_timer = QTimer(self)
-        self.play_timer.setInterval(100)
+        self.play_timer.setInterval(50)  # 20 fps: smooth karaoke wipe, still light on a Pi 3B
         self.play_timer.timeout.connect(self.update_playback_ui)
 
         self.bg_timer = QTimer(self)
@@ -1249,39 +2137,86 @@ class KaraokeApp(QWidget):
         self.score_timer.setSingleShot(True)
         self.score_timer.timeout.connect(self.hide_score_banner_and_next)
 
-        self.mic_energy_samples = []
-
-        self.mic_manager = MicrophoneChainManager(self.config)
-        self.mic_manager.apply_settings()
+        self.controls_timer = QTimer(self)
+        self.controls_timer.setSingleShot(True)
+        self.controls_timer.timeout.connect(self.hide_controls)
 
         self.remote_signals = RemoteBridgeSignals()
         self.remote_signals.reserve_song.connect(self.on_remote_reserve_song)
         self.remote_signals.adjust_key.connect(self.adjust_key)
         self.remote_signals.adjust_tempo.connect(self.adjust_tempo)
         self.remote_signals.skip_song.connect(self.play_next_reserved_song)
+        self.remote_signals.toggle_pause.connect(self.toggle_play_pause)
 
-        self.remote_server = None
+        QApplication.instance().installEventFilter(self)
+
+        # Show the first frame immediately; everything slow happens after the event loop starts.
+        QTimer.singleShot(0, self._late_init)
+
+    # ── startup (deferred) ──────────────────────────────────────────────────────
+    def _late_init(self):
         if self.config.get("REMOTE_ENABLED", "1") == "1":
-            r_port = int(self.config.get("REMOTE_PORT", "8080"))
-            r_pin = self.config.get("REMOTE_PIN", "")
-            self.remote_server = RemoteWebServer(r_port, r_pin, self, self.remote_signals)
-            self.remote_server.start()
+            try:
+                r_port = int(self.config.get("REMOTE_PORT", "8080"))
+                self.remote_server = RemoteWebServer(r_port, self.config.get("REMOTE_PIN", ""), self, self.remote_signals)
+                self.remote_server.start()
+            except Exception as e:
+                print(f"Remote server failed to start: {e}")
+
+        self.net_watcher = NetworkWatcher(self.config)
+        self.net_watcher.changed.connect(self.on_network_changed)
+        self.net_watcher.start()
 
         self.check_usb_and_media()
+        self.poll_timer.start(2000)
 
-    def init_ui(self):
-        self.setWindowTitle("KatoyOS Pinoy Videoke Player")
-        self.setWindowIcon(QIcon.fromTheme("katoyos"))
+        # PipeWire starts in parallel with us at boot; retry until it answers.
+        self._try_audio_setup()
+
+        # systemd-analyze only has a number once boot has finished, and it is slow: ask later, off-thread.
+        QTimer.singleShot(25000, self._measure_boot_time)
+
+    def _try_audio_setup(self):
+        if self._audio_ready:
+            return
+        self._audio_tries += 1
+        ok = True
+        if shutil.which("pactl"):
+            try:
+                ok = subprocess.run(["pactl", "info"], capture_output=True, timeout=3).returncode == 0
+            except Exception:
+                ok = False
+        if ok:
+            self.mic_manager.apply_settings()
+            self.mic_manager.set_music_volume(self.mic_manager.music_volume)
+            self._audio_ready = True
+        elif self._audio_tries < 40:
+            QTimer.singleShot(1500, self._try_audio_setup)
+
+    def _measure_boot_time(self):
+        self._boot_worker = FuncWorker(get_systemd_boot_time)
+        self._boot_worker.result.connect(self._on_boot_time)
+        self._boot_worker.start()
+
+    def _on_boot_time(self, text):
+        self.boot_info = text
+        if hasattr(self, "sys_boot_val"):
+            self.sys_boot_val.setText(text)
+
+    def present(self):
         if self.config.get("FULLSCREEN") == "1":
             self.showFullScreen()
         else:
-            self.resize(1024, 768)
+            self.resize(1280, 720)
+            self.show()
 
-        self.setAutoFillBackground(True)
-        p = self.palette()
-        p.setColor(QPalette.ColorRole.Window, QColor(14, 18, 28))
-        p.setColor(QPalette.ColorRole.WindowText, QColor(240, 240, 240))
-        self.setPalette(p)
+    # ── UI construction ─────────────────────────────────────────────────────────
+    def init_ui(self):
+        self.setObjectName("root")
+        self.setWindowTitle("KatoyOS Pinoy Videoke Player")
+        self.setWindowIcon(QIcon.fromTheme("katoyos"))
+        if self.kiosk:
+            self.setCursor(Qt.CursorShape.BlankCursor)
 
         self.root_layout = QVBoxLayout(self)
         self.root_layout.setContentsMargins(0, 0, 0, 0)
@@ -1291,44 +2226,32 @@ class KaraokeApp(QWidget):
 
         self.no_usb_page = self.create_no_usb_page()
         self.stack.addWidget(self.no_usb_page)
-
         self.library_page = self.create_library_page()
         self.stack.addWidget(self.library_page)
-
         self.player_page = self.create_player_page()
         self.stack.addWidget(self.player_page)
-
         self.settings_page = self.create_settings_page()
         self.stack.addWidget(self.settings_page)
-
         self.stack.setCurrentWidget(self.no_usb_page)
+        self.stack.currentChanged.connect(self.on_page_changed)
 
-        sc_esc = QShortcut(QKeySequence("Esc"), self, self.on_escape_pressed)
-        sc_esc.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
+        self.toast = Toast(self)
 
-        sc_f5 = QShortcut(QKeySequence("F5"), self, self.on_rescan_pressed)
-        sc_f5.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
+        def sc(seq, fn):
+            s = QShortcut(QKeySequence(seq), self, fn)
+            s.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
 
-        sc_space = QShortcut(QKeySequence("Space"), self, self.on_space_shortcut)
-        sc_space.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
-
-        sc_r = QShortcut(QKeySequence("R"), self, self.on_reserve_shortcut)
-        sc_r.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
-
-        sc_plus = QShortcut(QKeySequence("+"), self, lambda: self.adjust_key(1))
-        sc_plus.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
-
-        sc_minus = QShortcut(QKeySequence("-"), self, lambda: self.adjust_key(-1))
-        sc_minus.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
-
-        sc_tempo_up = QShortcut(QKeySequence("]"), self, lambda: self.adjust_tempo(0.05))
-        sc_tempo_up.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
-
-        sc_tempo_down = QShortcut(QKeySequence("["), self, lambda: self.adjust_tempo(-0.05))
-        sc_tempo_down.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
-
-        sc_n = QShortcut(QKeySequence("N"), self, self.on_next_shortcut)
-        sc_n.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
+        sc("Esc", self.on_escape_pressed)
+        sc("F5", self.on_rescan_pressed)
+        sc("Space", self.on_space_shortcut)
+        sc("R", self.on_reserve_shortcut)
+        sc("+", lambda: self.adjust_key(1))
+        sc("=", lambda: self.adjust_key(1))
+        sc("-", lambda: self.adjust_key(-1))
+        sc("]", lambda: self.adjust_tempo(0.05))
+        sc("[", lambda: self.adjust_tempo(-0.05))
+        sc("N", self.on_next_shortcut)
+        sc("F2", lambda: self.stack.setCurrentWidget(self.settings_page))
 
     def is_search_focused(self):
         return hasattr(self, 'search_input') and self.search_input.hasFocus()
@@ -1349,497 +2272,609 @@ class KaraokeApp(QWidget):
         code, title, artist, filepath = song_tuple
         self.reservation_queue.append((code, title, artist, filepath))
         self.update_queue_ui()
-        self.status_lbl.setText(f"Remote Reserved: [{code}] {title}")
+        self.status_lbl.setText(f"Remote reserved: [{code}] {title}")
+        self.toast.flash(f"Reserved from phone:  {title}", 3000)
 
+    # -- idle / "insert USB" page ---------------------------------------------------
     def create_no_usb_page(self):
         w = QWidget()
-        lay = QVBoxLayout(w)
-        lay.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        outer = QHBoxLayout(w)
+        outer.setContentsMargins(S(110), S(70), S(110), S(70))
+        outer.setSpacing(S(70))
 
-        icon_lbl = QLabel("🎤")
-        icon_lbl.setFont(QFont("Inter", 64))
-        icon_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        left = QVBoxLayout()
+        left.setAlignment(Qt.AlignmentFlag.AlignVCenter)
+        left.setSpacing(S(6))
 
-        t = QLabel("Please Insert Karaoke USB Drive")
-        t.setFont(QFont("Inter", 26, QFont.Weight.Bold))
-        t.setStyleSheet("color: #00d2ff; margin-top: 10px;")
-        t.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        brand_row = QHBoxLayout()
+        badge = QLabel()
+        badge.setPixmap(badge_pixmap("mic", S(64)))
+        brand = QLabel("KATOYOS")
+        brand.setFont(ui_font(22, QFont.Weight.ExtraBold, spacing=S(8)))
+        brand.setStyleSheet("color: #ff8cc4;")
+        brand_row.addWidget(badge)
+        brand_row.addSpacing(S(14))
+        brand_row.addWidget(brand)
+        brand_row.addStretch()
 
-        sub = QLabel("Scanning USB drives for MIDI/.KAR songs...\nInsert a flash drive containing your songs folder.")
-        sub.setFont(QFont("Inter", 14))
-        sub.setStyleSheet("color: #a0a5b5; margin-top: 10px;")
-        sub.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        title = GradientLabel("Pinoy\nVideoke", 132, QFont.Weight.Black, (COL_PINK, COL_GOLD))
+        self.eq = EqualizerWidget(22)
 
-        remote_ip = get_local_ip()
-        remote_port = self.config.get("REMOTE_PORT", "8080")
-        remote_url = f"http://{remote_ip}:{remote_port}"
+        headline = QLabel("Plug in your karaoke USB drive\nto start singing")
+        headline.setFont(ui_font(36, QFont.Weight.Bold))
+        self.idle_sub = QLabel("Looking for MIDI / KAR songs…")
+        self.idle_sub.setFont(ui_font(21, QFont.Weight.Medium))
+        self.idle_sub.setProperty("role", "muted")
 
-        is_ap, ap_ssid = check_and_trigger_wifi_hotspot(self.config)
+        left.addLayout(brand_row)
+        left.addSpacing(S(10))
+        left.addWidget(title)
+        left.addSpacing(S(14))
+        left.addWidget(self.eq)
+        left.addSpacing(S(26))
+        left.addWidget(headline)
+        left.addWidget(self.idle_sub)
 
-        qr_target_url = f"{remote_url}/wifi" if is_ap else remote_url
+        card = QFrame()
+        card.setObjectName("card")
+        card.setFixedWidth(S(620))
+        cl = QVBoxLayout(card)
+        cl.setContentsMargins(S(40), S(38), S(40), S(38))
+        cl.setSpacing(S(14))
+        cl.setAlignment(Qt.AlignmentFlag.AlignVCenter)
 
-        qr_box = QVBoxLayout()
-        qr_box.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        qr_lbl = QLabel()
-        qr_lbl.setPixmap(create_qr_pixmap(qr_target_url, scale=5))
-        qr_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.remote_title = QLabel("Sing from your phone")
+        self.remote_title.setFont(ui_font(30, QFont.Weight.ExtraBold))
+        self.remote_title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.remote_sub = QLabel("Scan the code to search, reserve songs and change key.")
+        self.remote_sub.setFont(ui_font(18, QFont.Weight.Medium))
+        self.remote_sub.setProperty("role", "muted")
+        self.remote_sub.setWordWrap(True)
+        self.remote_sub.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
-        display_text = f"📱 Phone Remote: {remote_url}"
-        if is_ap:
-            ap_pass = self.config.get("HOTSPOT_PASSWORD", "katoyos123")
-            display_text += f"\n📡 Wi-Fi Setup Hotspot Active: SSID '{ap_ssid}' (pass: {ap_pass})\nScan QR to open Wi-Fi setup"
+        qr_row = QHBoxLayout()
+        qr_row.setAlignment(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop)
+        qr_row.setSpacing(S(28))
+        self.qr_a = QrTile()
+        self.qr_b = QrTile()
+        qr_row.addWidget(self.qr_a)
+        qr_row.addWidget(self.qr_b)
 
-        qr_txt = QLabel(display_text)
-        qr_txt.setFont(QFont("Inter", 13, QFont.Weight.Bold))
-        qr_txt.setStyleSheet("color: #a7f3d0; margin-top: 6px;")
-        qr_txt.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.remote_url_lbl = QLabel("")
+        self.remote_url_lbl.setFont(ui_font(22, QFont.Weight.ExtraBold))
+        self.remote_url_lbl.setStyleSheet("color: #ffd166;")
+        self.remote_url_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.ap_info_lbl = QLabel("")
+        self.ap_info_lbl.setFont(ui_font(18, QFont.Weight.Medium))
+        self.ap_info_lbl.setProperty("role", "muted")
+        self.ap_info_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.ap_info_lbl.setWordWrap(True)
 
-        qr_box.addWidget(qr_lbl)
-        qr_box.addWidget(qr_txt)
+        cl.addWidget(self.remote_title)
+        cl.addWidget(self.remote_sub)
+        cl.addSpacing(S(6))
+        cl.addLayout(qr_row)
+        cl.addWidget(self.remote_url_lbl)
+        cl.addWidget(self.ap_info_lbl)
 
-        lay.addWidget(icon_lbl)
-        lay.addWidget(t)
-        lay.addWidget(sub)
-        lay.addLayout(qr_box)
+        outer.addLayout(left, 1)
+        outer.addWidget(card, 0, Qt.AlignmentFlag.AlignVCenter)
+        self.refresh_network_panel()
         return w
 
+    def refresh_network_panel(self):
+        ip, ap = self.net_ip, self.net_ap
+        port = self.config.get("REMOTE_PORT", "8080")
+        have_ip = bool(ip) and not ip.startswith("127.")
+        if ap:
+            ssid = self.net_ssid or self.config.get("HOTSPOT_SSID", "KatoyOS-Karaoke")
+            pwd = self.config.get("HOTSPOT_PASSWORD", "katoyos123")
+            host = ip if have_ip else "10.42.0.1"
+            self.remote_title.setText("Connect to Wi-Fi")
+            self.remote_sub.setText("No Wi-Fi yet. Use your phone to give this karaoke box internet access.")
+            self.qr_a.set_qr(wifi_qr_payload(ssid, pwd), "1 · Join hotspot", 230)
+            self.qr_a.show()
+            self.qr_b.set_qr(f"http://{host}:{port}/wifi", "2 · Open setup", 230)
+            self.remote_url_lbl.setText(f"http://{host}:{port}/wifi")
+            self.ap_info_lbl.setText(f"Hotspot: {ssid}   ·   Password: {pwd}")
+            self.ap_info_lbl.show()
+        elif have_ip:
+            self.remote_title.setText("Sing from your phone")
+            self.remote_sub.setText("Scan the code to search, reserve songs and change key.")
+            self.qr_a.hide()
+            self.qr_b.set_qr(f"http://{ip}:{port}", "Scan to open remote", 300)
+            self.remote_url_lbl.setText(f"http://{ip}:{port}")
+            self.ap_info_lbl.hide()
+        else:
+            self.remote_title.setText("Waiting for network…")
+            self.remote_sub.setText("Connecting to Wi-Fi. If nothing is saved, a setup hotspot will appear in a moment.")
+            self.qr_a.hide()
+            self.qr_b.img.clear()
+            self.qr_b.cap.setText("")
+            self.remote_url_lbl.setText("")
+            self.ap_info_lbl.hide()
+
+    def on_network_changed(self, ip, is_ap, ssid):
+        self.net_ip, self.net_ap, self.net_ssid = ip, is_ap, ssid
+        self.refresh_network_panel()
+        if hasattr(self, "sys_remote_val"):
+            self.sys_remote_val.setText(f"http://{ip}:{self.config.get('REMOTE_PORT', '8080')}" if ip and not ip.startswith("127.") else "offline")
+
+    # -- song library page -------------------------------------------------------------
     def create_library_page(self):
         w = QWidget()
-        lay = QHBoxLayout(w)
-        lay.setContentsMargins(25, 25, 25, 25)
-
-        # Left Column: Song Search & Table
-        left_col = QVBoxLayout()
+        root = QVBoxLayout(w)
+        root.setContentsMargins(S(60), S(40), S(60), S(30))
+        root.setSpacing(S(20))
 
         header = QHBoxLayout()
-        title = QLabel(" KatoyOS Pinoy Videoke")
-        title.setFont(QFont("Inter", 22, QFont.Weight.Bold))
-        title.setStyleSheet("color: #00d2ff;")
+        header.setSpacing(S(18))
+        badge = QLabel()
+        badge.setPixmap(badge_pixmap("mic", S(58)))
+        title = GradientLabel("Pinoy Videoke", 44, QFont.Weight.Black, (COL_PINK, COL_GOLD))
+        self.count_lbl = QLabel("0 songs")
+        self.count_lbl.setProperty("role", "count")
+        self.count_lbl.setFont(ui_font(18, QFont.Weight.ExtraBold))
 
-        self.rescan_btn = QPushButton("🔄 Rescan USB")
-        self.rescan_btn.setFont(QFont("Inter", 11))
-        self.rescan_btn.setStyleSheet("""
-            QPushButton { background-color: #2b3245; color: white; border-radius: 6px; padding: 8px 16px; }
-            QPushButton:hover { background-color: #3b445c; }
-        """)
+        self.rescan_btn = styled_button("", "icon", "refresh", icon_px=28)
+        self.rescan_btn.setToolTip("Rescan USB (F5)")
         self.rescan_btn.clicked.connect(self.on_rescan_pressed)
-
-        header.addWidget(title)
-        header.addStretch()
-
-        settings_btn = QPushButton("⚙ Settings")
-        settings_btn.setFont(QFont("Inter", 11))
-        settings_btn.setStyleSheet("""
-            QPushButton { background-color: #3b445c; color: white; border-radius: 6px; padding: 8px 14px; margin-right: 8px; }
-            QPushButton:hover { background-color: #4c5878; }
-        """)
+        settings_btn = styled_button("", "icon", "gear", icon_px=28)
+        settings_btn.setToolTip("Settings (F2)")
         settings_btn.clicked.connect(lambda: self.stack.setCurrentWidget(self.settings_page))
 
+        header.addWidget(badge)
+        header.addWidget(title)
+        header.addWidget(self.count_lbl, 0, Qt.AlignmentFlag.AlignVCenter)
+        header.addStretch()
         header.addWidget(settings_btn)
         header.addWidget(self.rescan_btn)
-        left_col.addLayout(header)
+        root.addLayout(header)
 
-        search_lay = QHBoxLayout()
-        search_lbl = QLabel("Search / Code:")
-        search_lbl.setFont(QFont("Inter", 13, QFont.Weight.Bold))
+        body = QHBoxLayout()
+        body.setSpacing(S(28))
 
+        # left: search + songs
+        left = QVBoxLayout()
+        left.setSpacing(S(16))
         self.search_input = QLineEdit()
-        self.search_input.setFont(QFont("Inter", 14))
-        self.search_input.setPlaceholderText("Enter 5-digit Song Code (e.g. 00042) or Title/Artist...")
-        self.search_input.setStyleSheet("""
-            QLineEdit { background-color: #1e2433; color: white; border: 2px solid #3b445c;
-                        border-radius: 8px; padding: 8px 14px; }
-            QLineEdit:focus { border: 2px solid #00d2ff; }
-        """)
+        self.search_input.setPlaceholderText("Type a 5-digit song code, title or artist…")
+        self.search_input.setFixedHeight(S(64))
+        s_ic = QLabel(self.search_input)
+        s_ic.setPixmap(make_icon("search", "#a9a1d6", 64).pixmap(S(30), S(30)))
+        s_ic.move(S(22), (S(64) - S(30)) // 2)
+        s_ic.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
         self.search_input.textChanged.connect(self.filter_library)
         self.search_input.returnPressed.connect(self.play_selected_or_first)
-
-        search_lay.addWidget(search_lbl)
-        search_lay.addWidget(self.search_input)
-        left_col.addLayout(search_lay)
+        left.addWidget(self.search_input)
 
         self.table = QTableWidget()
         self.table.setColumnCount(3)
         self.table.setHorizontalHeaderLabels(["Code", "Title", "Artist"])
-        self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
-        self.table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
-        self.table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
-        self.table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
-        self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
-        self.table.setStyleSheet("""
-            QTableWidget { background-color: #1a1f2c; color: white; gridline-color: #2b3245;
-                           border: 1px solid #2b3245; border-radius: 8px; font-size: 14px; }
-            QTableWidget::item { padding: 8px; }
-            QTableWidget::item:selected { background-color: #007acc; color: white; }
-            QHeaderView::section { background-color: #252c3d; color: #00d2ff; font-weight: bold;
-                                   padding: 8px; border: none; }
-        """)
+        hh = self.table.horizontalHeader()
+        hh.hide()
+        hh.setSectionResizeMode(0, QHeaderView.ResizeMode.Fixed)
+        hh.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+        hh.setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
+        self.table.setColumnWidth(0, S(150))
+        self.table.verticalHeader().hide()
+        self.table.verticalHeader().setDefaultSectionSize(S(66))
+        self.table.setShowGrid(False)
+        self.table.setFrameShape(QFrame.Shape.NoFrame)
+        self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.table.setVerticalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
+        self.table.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.table.setMouseTracking(True)
+        self.table.setItemDelegate(SongRowDelegate(self.table))
         self.table.doubleClicked.connect(self.play_selected_song)
-        left_col.addWidget(self.table, 1)
+        left.addWidget(self.table, 1)
 
         action_bar = QHBoxLayout()
-        play_now_btn = QPushButton("▶ PLAY NOW (Enter)")
-        play_now_btn.setFont(QFont("Inter", 11, QFont.Weight.Bold))
-        play_now_btn.setStyleSheet("""
-            QPushButton { background-color: #10b981; color: white; border-radius: 6px; padding: 10px 18px; }
-            QPushButton:hover { background-color: #059669; }
-        """)
+        action_bar.setSpacing(S(14))
+        play_now_btn = styled_button("Play now", "primary", "play")
         play_now_btn.clicked.connect(self.play_selected_song)
-
-        reserve_btn = QPushButton("📌 RESERVE (R)")
-        reserve_btn.setFont(QFont("Inter", 11, QFont.Weight.Bold))
-        reserve_btn.setStyleSheet("""
-            QPushButton { background-color: #8b5cf6; color: white; border-radius: 6px; padding: 10px 18px; }
-            QPushButton:hover { background-color: #7c3aed; }
-        """)
+        reserve_btn = styled_button("Reserve", None, "bookmark")
         reserve_btn.clicked.connect(self.reserve_selected_song)
-
         action_bar.addWidget(play_now_btn)
         action_bar.addWidget(reserve_btn)
         action_bar.addStretch()
-        left_col.addLayout(action_bar)
 
-        footer = QHBoxLayout()
-        boot_info = get_systemd_boot_time()
-
-        self.status_lbl = QLabel(f"Ready ({boot_info})")
-        self.status_lbl.setFont(QFont("Inter", 11))
-        self.status_lbl.setStyleSheet("color: #8a92a6;")
-
+        self.status_lbl = QLabel("Ready")
+        self.status_lbl.setFont(ui_font(17, QFont.Weight.Medium))
+        self.status_lbl.setProperty("role", "muted")
         self.index_progress_bar = QProgressBar()
-        self.index_progress_bar.setFixedWidth(180)
-        self.index_progress_bar.setFixedHeight(14)
+        self.index_progress_bar.setFixedWidth(S(220))
         self.index_progress_bar.setTextVisible(False)
-        self.index_progress_bar.setStyleSheet("""
-            QProgressBar { background: #252c3d; border-radius: 4px; border: none; }
-            QProgressBar::chunk { background: #8b5cf6; border-radius: 4px; }
-        """)
         self.index_progress_bar.hide()
+        action_bar.addWidget(self.status_lbl)
+        action_bar.addWidget(self.index_progress_bar)
+        left.addLayout(action_bar)
 
-        footer.addWidget(self.status_lbl)
-        footer.addStretch()
-        footer.addWidget(self.index_progress_bar)
-        left_col.addLayout(footer)
+        # right: reservation queue
+        card = QFrame()
+        card.setObjectName("card")
+        card.setFixedWidth(S(520))
+        right = QVBoxLayout(card)
+        right.setContentsMargins(S(26), S(26), S(26), S(26))
+        right.setSpacing(S(16))
 
-        lay.addLayout(left_col, 3)
+        qh = QHBoxLayout()
+        qt = QLabel("Up next")
+        qt.setFont(ui_font(30, QFont.Weight.ExtraBold))
+        self.queue_count_lbl = QLabel("0")
+        self.queue_count_lbl.setProperty("role", "count")
+        self.queue_count_lbl.setFont(ui_font(18, QFont.Weight.ExtraBold))
+        qh.addWidget(qt)
+        qh.addWidget(self.queue_count_lbl, 0, Qt.AlignmentFlag.AlignVCenter)
+        qh.addStretch()
+        right.addLayout(qh)
 
-        # Right Column: Pinoy Song Reservation / Queue List Panel
-        right_col = QVBoxLayout()
+        self.queue_list = EmptyAwareList("No songs reserved yet.\nSelect a song and press R.")
+        self.queue_list.setItemDelegate(QueueRowDelegate(self.queue_list))
+        self.queue_list.setFrameShape(QFrame.Shape.NoFrame)
+        self.queue_list.setVerticalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
+        right.addWidget(self.queue_list, 1)
 
-        queue_title = QLabel("📋 SONG RESERVATIONS (Queue)")
-        queue_title.setFont(QFont("Inter", 14, QFont.Weight.Bold))
-        queue_title.setStyleSheet("color: #f59e0b;")
-
-        self.queue_list = QListWidget()
-        self.queue_list.setStyleSheet("""
-            QListWidget { background-color: #181d2a; color: #e2e8f0; border: 1px solid #2b3245;
-                          border-radius: 8px; font-size: 13px; padding: 5px; }
-            QListWidget::item { padding: 8px; border-bottom: 1px solid #252c3d; }
-            QListWidget::item:selected { background-color: #312e81; color: #a7f3d0; }
-        """)
-
-        q_btn_lay = QHBoxLayout()
-        clear_q_btn = QPushButton("Clear Queue")
-        clear_q_btn.setFont(QFont("Inter", 10))
-        clear_q_btn.setStyleSheet("background-color: #374151; color: white; border-radius: 4px; padding: 6px 12px;")
+        qb = QHBoxLayout()
+        qb.setSpacing(S(12))
+        clear_q_btn = styled_button("Clear", None, "close", font_px=17, icon_px=20)
         clear_q_btn.clicked.connect(self.clear_reservation_queue)
-
-        play_q_btn = QPushButton("Play Reserved (N)")
-        play_q_btn.setFont(QFont("Inter", 10, QFont.Weight.Bold))
-        play_q_btn.setStyleSheet("background-color: #6366f1; color: white; border-radius: 4px; padding: 6px 12px;")
+        play_q_btn = styled_button("Play next", "mint", "next", font_px=17, icon_px=22)
         play_q_btn.clicked.connect(self.play_next_reserved_song)
+        qb.addWidget(clear_q_btn)
+        qb.addWidget(play_q_btn, 1)
+        right.addLayout(qb)
 
-        q_btn_lay.addWidget(clear_q_btn)
-        q_btn_lay.addWidget(play_q_btn)
+        body.addLayout(left, 1)
+        body.addWidget(card)
+        root.addLayout(body, 1)
 
-        hints = QLabel("🎮 Pinoy Videoke Controls:\n"
-                       "• [Enter] Play Song\n"
-                       "• [R] Reserve Song\n"
-                       "• [N] Play Next Reserved\n"
-                       "• [+/-] Key Transpose\n"
-                       "• [[/]] Tempo Control\n"
-                       "• [Space] Pause / Resume\n"
-                       "• [Esc] Stop / Back")
-        hints.setFont(QFont("Inter", 11))
-        hints.setStyleSheet("color: #94a3b8; background: #181d2a; padding: 12px; border-radius: 8px; border: 1px solid #2b3245;")
-
-        right_col.addWidget(queue_title)
-        right_col.addWidget(self.queue_list, 1)
-        right_col.addLayout(q_btn_lay)
-        right_col.addWidget(hints)
-
-        lay.addLayout(right_col, 1)
-
+        hints = QHBoxLayout()
+        hints.setSpacing(S(26))
+        for k, t in (("Enter", "Play"), ("R", "Reserve"), ("N", "Next"), ("+ / −", "Key"),
+                     ("[ ]", "Tempo"), ("Space", "Pause"), ("F2", "Settings"), ("Esc", "Back")):
+            hints.addWidget(kbd_chip(k, t))
+        hints.addStretch()
+        root.addLayout(hints)
         return w
 
+    # -- player page ----------------------------------------------------------------
     def create_player_page(self):
         w = QWidget()
         lay = QVBoxLayout(w)
-        lay.setContentsMargins(40, 25, 40, 25)
+        lay.setContentsMargins(S(56), S(36), S(56), S(30))
+        lay.setSpacing(S(14))
 
-        self.bg_label = QLabel(w)
-        self.bg_label.setScaledContents(True)
-        self.bg_label.lower()
-
-        top_bar = QHBoxLayout()
+        strip = QFrame()
+        strip.setObjectName("strip")
+        tl = QHBoxLayout(strip)
+        tl.setContentsMargins(S(22), S(14), S(22), S(14))
+        tl.setSpacing(S(18))
 
         self.p_code_lbl = QLabel("00001")
-        self.p_code_lbl.setFont(QFont("Inter", 20, QFont.Weight.Bold))
-        self.p_code_lbl.setStyleSheet("color: #00d2ff; background: rgba(0,0,0,0.7); padding: 4px 12px; border-radius: 6px;")
+        self.p_code_lbl.setProperty("role", "code")
+        self.p_code_lbl.setFont(ui_font(26, QFont.Weight.ExtraBold))
 
+        tcol = QVBoxLayout()
+        tcol.setSpacing(0)
         self.p_title_lbl = QLabel("Song Title")
-        self.p_title_lbl.setFont(QFont("Inter", 22, QFont.Weight.Bold))
-        self.p_title_lbl.setStyleSheet("color: white; background: rgba(0,0,0,0.7); padding: 4px 12px; border-radius: 6px;")
-
+        self.p_title_lbl.setFont(ui_font(34, QFont.Weight.ExtraBold))
         self.p_artist_lbl = QLabel("Artist")
-        self.p_artist_lbl.setFont(QFont("Inter", 16))
-        self.p_artist_lbl.setStyleSheet("color: #d0d5e0; background: rgba(0,0,0,0.7); padding: 4px 12px; border-radius: 6px;")
+        self.p_artist_lbl.setFont(ui_font(22, QFont.Weight.Medium))
+        self.p_artist_lbl.setProperty("role", "muted")
+        tcol.addWidget(self.p_title_lbl)
+        tcol.addWidget(self.p_artist_lbl)
 
-        # Key / Pitch Indicator
-        self.key_lbl = QLabel("KEY: 0")
-        self.key_lbl.setFont(QFont("Inter", 14, QFont.Weight.Bold))
-        self.key_lbl.setStyleSheet("color: #f59e0b; background: rgba(0,0,0,0.7); padding: 4px 10px; border-radius: 6px;")
+        self.key_lbl = QLabel("KEY 0")
+        self.key_lbl.setProperty("role", "chip")
+        self.key_lbl.setProperty("tone", "gold")
+        self.key_lbl.setFont(ui_font(20, QFont.Weight.ExtraBold))
+        self.tempo_lbl = QLabel("TEMPO 100%")
+        self.tempo_lbl.setProperty("role", "chip")
+        self.tempo_lbl.setProperty("tone", "cyan")
+        self.tempo_lbl.setFont(ui_font(20, QFont.Weight.ExtraBold))
 
-        # Tempo Indicator
-        self.tempo_lbl = QLabel("TEMPO: 100%")
-        self.tempo_lbl.setFont(QFont("Inter", 14, QFont.Weight.Bold))
-        self.tempo_lbl.setStyleSheet("color: #10b981; background: rgba(0,0,0,0.7); padding: 4px 10px; border-radius: 6px;")
-
-        top_bar.addWidget(self.p_code_lbl)
-        top_bar.addWidget(self.p_title_lbl)
-        top_bar.addWidget(self.p_artist_lbl)
-        top_bar.addWidget(self.key_lbl)
-        top_bar.addWidget(self.tempo_lbl)
-        top_bar.addStretch()
-
-        stop_btn = QPushButton("🔙 Song List")
-        stop_btn.setFont(QFont("Inter", 12))
-        stop_btn.setStyleSheet("background: rgba(43,50,69,0.8); color: white; border-radius: 6px; padding: 8px 16px;")
+        stop_btn = styled_button("Song list", None, "back", font_px=18, icon_px=22)
         stop_btn.clicked.connect(self.stop_playback)
-        top_bar.addWidget(stop_btn)
 
-        lay.addLayout(top_bar)
+        tl.addWidget(self.p_code_lbl)
+        tl.addLayout(tcol, 1)
+        tl.addWidget(self.key_lbl)
+        tl.addWidget(self.tempo_lbl)
+        tl.addWidget(stop_btn)
+        lay.addWidget(strip)
 
-        # NEXT UP Banner (Pinoy Videoke ticker)
-        self.next_up_lbl = QLabel("NEXT UP: None")
-        self.next_up_lbl.setFont(QFont("Inter", 13, QFont.Weight.Bold))
-        self.next_up_lbl.setStyleSheet("color: #a7f3d0; background: rgba(16, 185, 129, 0.25); border: 1px solid #10b981; padding: 6px 14px; border-radius: 6px;")
-        lay.addWidget(self.next_up_lbl)
+        # centre: lyrics  /  score card
+        self.center_stack = QStackedWidget()
+        lyr = QWidget()
+        lv = QVBoxLayout(lyr)
+        lv.setContentsMargins(0, 0, 0, 0)
+        lv.setSpacing(S(6))
+        lv.setAlignment(Qt.AlignmentFlag.AlignVCenter)
+        self.lyric_prev_lbl = LyricLineWidget(38, "dim")
+        self.lyric_curr_lbl = LyricLineWidget(78, "current")
+        self.lyric_next_lbl = LyricLineWidget(46, "dim")
+        lv.addStretch(1)
+        lv.addWidget(self.lyric_prev_lbl)
+        lv.addSpacing(S(8))
+        lv.addWidget(self.lyric_curr_lbl)
+        lv.addSpacing(S(8))
+        lv.addWidget(self.lyric_next_lbl)
+        lv.addStretch(1)
 
-        # Lyrics Container
-        self.lyrics_container = QVBoxLayout()
-        self.lyrics_container.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        score_page = QWidget()
+        sv = QVBoxLayout(score_page)
+        sv.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.score_banner = ScoreCard()
+        sv.addWidget(self.score_banner, 0, Qt.AlignmentFlag.AlignCenter)
 
-        self.lyric_prev_lbl = QLabel("")
-        self.lyric_prev_lbl.setFont(QFont("Inter", 20))
-        self.lyric_prev_lbl.setStyleSheet("color: rgba(255,255,255,0.4); background: rgba(0,0,0,0.4); border-radius: 8px; padding: 6px;")
-        self.lyric_prev_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.center_stack.addWidget(lyr)
+        self.center_stack.addWidget(score_page)
+        lay.addWidget(self.center_stack, 1)
 
-        self.lyric_curr_lbl = QLabel("♪ ... ♪")
-        self.lyric_curr_lbl.setFont(QFont("Inter", 32, QFont.Weight.Bold))
-        self.lyric_curr_lbl.setStyleSheet("color: #00f0ff; background: rgba(0,0,0,0.7); border: 2px solid #00d2ff; border-radius: 12px; padding: 14px;")
-        self.lyric_curr_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-
-        self.lyric_next_lbl = QLabel("")
-        self.lyric_next_lbl.setFont(QFont("Inter", 20))
-        self.lyric_next_lbl.setStyleSheet("color: rgba(255,255,255,0.6); background: rgba(0,0,0,0.4); border-radius: 8px; padding: 6px;")
-        self.lyric_next_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-
-        # Pinoy Karaoke End-of-Song Score Banner Overlay
-        self.score_banner = QLabel("", w)
-        self.score_banner.setFont(QFont("Inter", 28, QFont.Weight.Bold))
-        self.score_banner.setStyleSheet("""
-            QLabel { background-color: rgba(15, 23, 42, 0.95); color: #f59e0b; border: 3px solid #f59e0b;
-                     border-radius: 16px; padding: 20px; }
-        """)
-        self.score_banner.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.score_banner.hide()
-
-        self.lyrics_container.addStretch()
-        self.lyrics_container.addWidget(self.lyric_prev_lbl)
-        self.lyrics_container.addWidget(self.lyric_curr_lbl)
-        self.lyrics_container.addWidget(self.lyric_next_lbl)
-        self.lyrics_container.addWidget(self.score_banner)
-        self.lyrics_container.addStretch()
-
-        lay.addLayout(self.lyrics_container, 1)
-
-        bottom_bar = QVBoxLayout()
-
-        time_lay = QHBoxLayout()
+        # bottom: next-up + time + progress + controls
+        info = QHBoxLayout()
+        self.next_up_lbl = QLabel("")
+        self.next_up_lbl.setProperty("role", "nextup")
+        self.next_up_lbl.setFont(ui_font(19, QFont.Weight.DemiBold))
+        self.next_up_lbl.setTextFormat(Qt.TextFormat.RichText)
         self.time_lbl = QLabel("00:00 / 00:00")
-        self.time_lbl.setFont(QFont("Inter", 12))
-        self.time_lbl.setStyleSheet("color: white; background: rgba(0,0,0,0.5); padding: 4px 8px; border-radius: 4px;")
-        time_lay.addStretch()
-        time_lay.addWidget(self.time_lbl)
+        self.time_lbl.setFont(ui_font(21, QFont.Weight.Bold))
+        info.addWidget(self.next_up_lbl)
+        info.addStretch()
+        info.addWidget(self.time_lbl)
+        lay.addLayout(info)
 
         self.progress_bar = QProgressBar()
-        self.progress_bar.setFixedHeight(8)
         self.progress_bar.setTextVisible(False)
-        self.progress_bar.setStyleSheet("""
-            QProgressBar { background: rgba(255,255,255,0.2); border-radius: 4px; border: none; }
-            QProgressBar::chunk { background: #00d2ff; border-radius: 4px; }
-        """)
+        lay.addWidget(self.progress_bar)
 
-        ctrl_lay = QHBoxLayout()
-        ctrl_lay.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        holder = QWidget()
+        holder.setFixedHeight(S(112))
+        hl = QHBoxLayout(holder)
+        hl.setContentsMargins(0, S(10), 0, 0)
+        hl.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
-        key_down_btn = QPushButton("KEY -")
-        key_down_btn.setFont(QFont("Inter", 11, QFont.Weight.Bold))
-        key_down_btn.setStyleSheet("background: rgba(55, 65, 81, 0.8); color: white; border-radius: 6px; padding: 8px 14px;")
-        key_down_btn.clicked.connect(lambda: self.adjust_key(-1))
+        self.controls_card = QFrame()
+        self.controls_card.setObjectName("controls")
+        cl = QHBoxLayout(self.controls_card)
+        cl.setContentsMargins(S(22), S(8), S(22), S(8))
+        cl.setSpacing(S(12))
 
-        key_up_btn = QPushButton("KEY +")
-        key_up_btn.setFont(QFont("Inter", 11, QFont.Weight.Bold))
-        key_up_btn.setStyleSheet("background: rgba(55, 65, 81, 0.8); color: white; border-radius: 6px; padding: 8px 14px;")
-        key_up_btn.clicked.connect(lambda: self.adjust_key(1))
+        def ctl(text, icon, fn, variant=None):
+            b = styled_button(text, variant, icon, font_px=18, icon_px=24)
+            b.clicked.connect(fn)
+            return b
 
-        tempo_down_btn = QPushButton("TEMPO -")
-        tempo_down_btn.setFont(QFont("Inter", 11, QFont.Weight.Bold))
-        tempo_down_btn.setStyleSheet("background: rgba(55, 65, 81, 0.8); color: white; border-radius: 6px; padding: 8px 14px;")
-        tempo_down_btn.clicked.connect(lambda: self.adjust_tempo(-0.05))
-
-        tempo_up_btn = QPushButton("TEMPO +")
-        tempo_up_btn.setFont(QFont("Inter", 11, QFont.Weight.Bold))
-        tempo_up_btn.setStyleSheet("background: rgba(55, 65, 81, 0.8); color: white; border-radius: 6px; padding: 8px 14px;")
-        tempo_up_btn.clicked.connect(lambda: self.adjust_tempo(0.05))
-
-        self.pause_btn = QPushButton("⏸ Pause")
-        self.pause_btn.setFont(QFont("Inter", 12, QFont.Weight.Bold))
-        self.pause_btn.setStyleSheet("background: rgba(0, 122, 204, 0.85); color: white; border-radius: 6px; padding: 8px 20px;")
+        cl.addWidget(ctl("Key", "down", lambda: self.adjust_key(-1)))
+        cl.addWidget(ctl("Key", "up", lambda: self.adjust_key(1)))
+        cl.addSpacing(S(10))
+        cl.addWidget(ctl("Tempo", "minus", lambda: self.adjust_tempo(-0.05)))
+        cl.addWidget(ctl("Tempo", "plus", lambda: self.adjust_tempo(0.05)))
+        cl.addSpacing(S(10))
+        self.pause_btn = styled_button("Pause", "primary", "pause", font_px=20, icon_px=26)
         self.pause_btn.clicked.connect(self.toggle_play_pause)
+        cl.addWidget(self.pause_btn)
+        cl.addSpacing(S(10))
+        cl.addWidget(ctl("Next", "next", self.play_next_reserved_song, "mint"))
+        hl.addWidget(self.controls_card)
+        lay.addWidget(holder)
 
-        next_btn = QPushButton("⏭ Next Song")
-        next_btn.setFont(QFont("Inter", 11, QFont.Weight.Bold))
-        next_btn.setStyleSheet("background: rgba(139, 92, 246, 0.85); color: white; border-radius: 6px; padding: 8px 16px;")
-        next_btn.clicked.connect(self.play_next_reserved_song)
-
-        ctrl_lay.addWidget(key_down_btn)
-        ctrl_lay.addWidget(key_up_btn)
-        ctrl_lay.addWidget(tempo_down_btn)
-        ctrl_lay.addWidget(tempo_up_btn)
-        ctrl_lay.addWidget(self.pause_btn)
-        ctrl_lay.addWidget(next_btn)
-
-        bottom_bar.addLayout(time_lay)
-        bottom_bar.addWidget(self.progress_bar)
-        bottom_bar.addLayout(ctrl_lay)
-
-        lay.addLayout(bottom_bar)
+        self._set_next_up()
         return w
 
+    # -- settings page --------------------------------------------------------------
     def create_settings_page(self):
         w = QWidget()
         lay = QVBoxLayout(w)
-        lay.setContentsMargins(40, 30, 40, 30)
+        lay.setContentsMargins(S(110), S(50), S(110), S(40))
+        lay.setSpacing(S(24))
 
         header = QHBoxLayout()
-        title = QLabel("⚙ Karaoke System Settings")
-        title.setFont(QFont("Inter", 22, QFont.Weight.Bold))
-        title.setStyleSheet("color: #00d2ff;")
-
-        back_btn = QPushButton("🔙 Back to Song List")
-        back_btn.setFont(QFont("Inter", 11, QFont.Weight.Bold))
-        back_btn.setStyleSheet("background-color: #2b3245; color: white; border-radius: 6px; padding: 8px 16px;")
+        title = GradientLabel("Settings", 46, QFont.Weight.Black, (COL_PINK, COL_GOLD))
+        back_btn = styled_button("Back to songs", "primary", "back")
         back_btn.clicked.connect(lambda: self.stack.setCurrentWidget(self.library_page))
-
         header.addWidget(title)
         header.addStretch()
         header.addWidget(back_btn)
         lay.addLayout(header)
 
-        info = QLabel("Settings adjust runtime audio, microphone chain, scoring mode, and phone remote server.")
-        info.setFont(QFont("Inter", 12))
-        info.setStyleSheet("color: #a0a5b5; margin-bottom: 20px;")
-        lay.addWidget(info)
+        card = QFrame()
+        card.setObjectName("card")
+        cv = QVBoxLayout(card)
+        cv.setContentsMargins(S(40), S(30), S(40), S(30))
+        cv.setSpacing(S(26))
 
-        # Settings Options Grid
-        grid = QVBoxLayout()
+        def slider_row(icon, name, desc, value, apply_fn):
+            row = QHBoxLayout()
+            row.setSpacing(S(22))
+            ic = QLabel()
+            ic.setPixmap(badge_pixmap(icon, S(60)))
+            col = QVBoxLayout()
+            col.setSpacing(0)
+            n = QLabel(name)
+            n.setFont(ui_font(25, QFont.Weight.ExtraBold))
+            d = QLabel(desc)
+            d.setFont(ui_font(17, QFont.Weight.Medium))
+            d.setProperty("role", "muted")
+            col.addWidget(n)
+            col.addWidget(d)
+            sl = QSlider(Qt.Orientation.Horizontal)
+            sl.setRange(0, 100)
+            sl.setSingleStep(5)
+            sl.setPageStep(10)
+            sl.setValue(int(value))
+            sl.setFixedWidth(S(520))
+            val = QLabel(f"{int(value)}%")
+            val.setFont(ui_font(24, QFont.Weight.ExtraBold))
+            val.setMinimumWidth(S(86))
+            val.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
 
-        # Mic Vol
-        m_row = QHBoxLayout()
-        m_lbl = QLabel("🎤 Microphone Volume:")
-        m_lbl.setFont(QFont("Inter", 13, QFont.Weight.Bold))
-        m_val = QLabel(f"{self.mic_manager.mic_volume}%")
-        m_val.setFont(QFont("Inter", 13))
+            debounce = QTimer(self)
+            debounce.setSingleShot(True)
+            debounce.setInterval(180)  # don't spawn a pactl process on every slider tick
+            debounce.timeout.connect(lambda: apply_fn(sl.value()))
 
-        m_down = QPushButton("-")
-        m_down.clicked.connect(lambda: (
-            self.mic_manager.set_mic_volume(self.mic_manager.mic_volume - 5),
-            m_val.setText(f"{self.mic_manager.mic_volume}%")
-        ))
-        m_up = QPushButton("+")
-        m_up.clicked.connect(lambda: (
-            self.mic_manager.set_mic_volume(self.mic_manager.mic_volume + 5),
-            m_val.setText(f"{self.mic_manager.mic_volume}%")
-        ))
-        for b in (m_down, m_up):
-            b.setStyleSheet("background: #374151; color: white; padding: 4px 12px; border-radius: 4px; font-size: 14px;")
+            def changed(v):
+                val.setText(f"{v}%")
+                debounce.start()
+            sl.valueChanged.connect(changed)
+            row.addWidget(ic)
+            row.addLayout(col, 1)
+            row.addWidget(sl)
+            row.addWidget(val)
+            return row
 
-        m_row.addWidget(m_lbl)
-        m_row.addStretch()
-        m_row.addWidget(m_down)
-        m_row.addWidget(m_val)
-        m_row.addWidget(m_up)
-        grid.addLayout(m_row)
+        cv.addLayout(slider_row("mic", "Microphone volume", "How loud your voice is in the speakers",
+                                self.mic_manager.mic_volume, self.mic_manager.set_mic_volume))
+        cv.addLayout(slider_row("note", "Music volume", "Backing track level",
+                                self.mic_manager.music_volume, self.mic_manager.set_music_volume))
 
-        # Music Vol
-        mu_row = QHBoxLayout()
-        mu_lbl = QLabel("🎵 Music Playback Volume:")
-        mu_lbl.setFont(QFont("Inter", 13, QFont.Weight.Bold))
-        mu_val = QLabel(f"{self.mic_manager.music_volume}%")
-        mu_val.setFont(QFont("Inter", 13))
-
-        mu_down = QPushButton("-")
-        mu_down.clicked.connect(lambda: (
-            self.mic_manager.set_music_volume(self.mic_manager.music_volume - 5),
-            mu_val.setText(f"{self.mic_manager.music_volume}%")
-        ))
-        mu_up = QPushButton("+")
-        mu_up.clicked.connect(lambda: (
-            self.mic_manager.set_music_volume(self.mic_manager.music_volume + 5),
-            mu_val.setText(f"{self.mic_manager.music_volume}%")
-        ))
-        for b in (mu_down, mu_up):
-            b.setStyleSheet("background: #374151; color: white; padding: 4px 12px; border-radius: 4px; font-size: 14px;")
-
-        mu_row.addWidget(mu_lbl)
-        mu_row.addStretch()
-        mu_row.addWidget(mu_down)
-        mu_row.addWidget(mu_val)
-        mu_row.addWidget(mu_up)
-        grid.addLayout(mu_row)
-
-        # Scoring Mode
         sc_row = QHBoxLayout()
-        sc_lbl = QLabel("🏆 Scoring Mode:")
-        sc_lbl.setFont(QFont("Inter", 13, QFont.Weight.Bold))
-        cur_sc = self.config.get("SCORING_MODE", "real").upper()
-        sc_val = QLabel(cur_sc)
-        sc_val.setFont(QFont("Inter", 13))
+        sc_row.setSpacing(S(22))
+        ic = QLabel()
+        ic.setPixmap(badge_pixmap("play", S(60)))
+        col = QVBoxLayout()
+        col.setSpacing(0)
+        n = QLabel("Scoring")
+        n.setFont(ui_font(25, QFont.Weight.ExtraBold))
+        d = QLabel("REAL listens to the mic · FUN gives a cheerful random score")
+        d.setFont(ui_font(17, QFont.Weight.Medium))
+        d.setProperty("role", "muted")
+        col.addWidget(n)
+        col.addWidget(d)
+        self.seg_real = styled_button("REAL", "seg")
+        self.seg_fun = styled_button("FUN", "seg")
+        for b in (self.seg_real, self.seg_fun):
+            b.setCheckable(True)
+        grp = QButtonGroup(self)
+        grp.setExclusive(True)
+        grp.addButton(self.seg_real)
+        grp.addButton(self.seg_fun)
+        (self.seg_real if self.config.get("SCORING_MODE", "real").lower() == "real" else self.seg_fun).setChecked(True)
+        self.seg_real.clicked.connect(lambda: self.config.__setitem__("SCORING_MODE", "real"))
+        self.seg_fun.clicked.connect(lambda: self.config.__setitem__("SCORING_MODE", "fun"))
+        sc_row.addWidget(ic)
+        sc_row.addLayout(col, 1)
+        sc_row.addWidget(self.seg_real)
+        sc_row.addWidget(self.seg_fun)
+        cv.addLayout(sc_row)
+        lay.addWidget(card)
 
-        sc_btn = QPushButton("Toggle Mode")
-        sc_btn.setStyleSheet("background: #6366f1; color: white; padding: 6px 14px; border-radius: 4px; font-size: 13px;")
-        def toggle_scoring():
-            new_m = "fun" if self.config.get("SCORING_MODE", "real").lower() == "real" else "real"
-            self.config["SCORING_MODE"] = new_m
-            sc_val.setText(new_m.upper())
-        sc_btn.clicked.connect(toggle_scoring)
+        sysc = QFrame()
+        sysc.setObjectName("card")
+        sl_ = QVBoxLayout(sysc)
+        sl_.setContentsMargins(S(40), S(26), S(40), S(26))
+        sl_.setSpacing(S(10))
+        st = QLabel("System")
+        st.setFont(ui_font(22, QFont.Weight.ExtraBold, spacing=S(3)))
+        st.setProperty("role", "muted")
+        sl_.addWidget(st)
 
-        sc_row.addWidget(sc_lbl)
-        sc_row.addStretch()
-        sc_row.addWidget(sc_val)
-        sc_row.addWidget(sc_btn)
-        grid.addLayout(sc_row)
+        def info_row(label, initial):
+            r = QHBoxLayout()
+            a = QLabel(label)
+            a.setFont(ui_font(20, QFont.Weight.DemiBold))
+            b = QLabel(initial)
+            b.setFont(ui_font(20, QFont.Weight.Bold))
+            b.setStyleSheet("color: #ffd166;")
+            r.addWidget(a)
+            r.addStretch()
+            r.addWidget(b)
+            sl_.addLayout(r)
+            return b
 
-        lay.addLayout(grid)
+        port = self.config.get("REMOTE_PORT", "8080")
+        self.sys_remote_val = info_row("Phone remote", f"http://{self.net_ip}:{port}" if self.net_ip and not self.net_ip.startswith("127.") else "waiting for network…")
+        self.sys_songs_val = info_row("Song library", "no USB drive")
+        self.sys_boot_val = info_row("Boot time", self.boot_info or "measuring…")
+        lay.addWidget(sysc)
         lay.addStretch()
         return w
 
+    # ── backdrop painting ───────────────────────────────────────────────────────
+    def _build_gradient_bg(self, size):
+        pm = QPixmap(size)
+        p = QPainter(pm)
+        w, h = size.width(), size.height()
+        g = QLinearGradient(0, 0, 0, h)
+        g.setColorAt(0, COL_BG_TOP)
+        g.setColorAt(1, COL_BG_BOTTOM)
+        p.fillRect(0, 0, w, h, g)
+        for cx, cy, rad, col in ((0.12, 0.05, 0.75, QColor(255, 46, 147, 70)),
+                                 (0.95, 0.98, 0.80, QColor(34, 211, 238, 52)),
+                                 (0.80, 0.10, 0.45, QColor(139, 60, 240, 60))):
+            rg = QRadialGradient(w * cx, h * cy, max(w, h) * rad)
+            rg.setColorAt(0, col)
+            rg.setColorAt(1, QColor(col.red(), col.green(), col.blue(), 0))
+            p.fillRect(0, 0, w, h, rg)
+        p.end()
+        return pm
+
+    def _build_cover_bg(self, size):
+        src = self._cover_src
+        scaled = src.scaled(size, Qt.AspectRatioMode.KeepAspectRatioByExpanding, Qt.TransformationMode.SmoothTransformation)
+        x = (scaled.width() - size.width()) // 2
+        y = (scaled.height() - size.height()) // 2
+        pm = scaled.copy(x, y, size.width(), size.height())
+        p = QPainter(pm)
+        g = QLinearGradient(0, 0, 0, size.height())
+        g.setColorAt(0.0, QColor(10, 6, 31, 150))
+        g.setColorAt(0.45, QColor(10, 6, 31, 110))
+        g.setColorAt(1.0, QColor(10, 6, 31, 215))
+        p.fillRect(pm.rect(), g)
+        p.fillRect(pm.rect(), QColor(60, 20, 110, 55))
+        p.end()
+        return pm
+
+    def paintEvent(self, ev):
+        p = QPainter(self)
+        size = self.size()
+        on_player = hasattr(self, "player_page") and self.stack.currentWidget() is self.player_page
+        if on_player and self._cover_src is not None and not self._cover_src.isNull():
+            if self._cover_cache is None or self._cover_cache.size() != size:
+                self._cover_cache = self._build_cover_bg(size)
+            p.drawPixmap(0, 0, self._cover_cache)
+        else:
+            if self._grad_cache is None or self._grad_cache.size() != size:
+                self._grad_cache = self._build_gradient_bg(size)
+            p.drawPixmap(0, 0, self._grad_cache)
+
     def resizeEvent(self, event):
         super().resizeEvent(event)
-        if hasattr(self, 'bg_label') and self.bg_label:
-            self.bg_label.resize(self.size())
+        self._grad_cache = None
+        self._cover_cache = None
+
+    def on_page_changed(self, _idx):
+        if self.stack.currentWidget() is self.library_page:
+            self.search_input.setFocus()
+        if self.stack.currentWidget() is self.player_page:
+            self.poke_controls()
+        if self.stack.currentWidget() is self.settings_page:
+            self.sys_songs_val.setText(f"{self.song_count:,} songs" if self.songs_dir else "no USB drive")
+        self.update()
+
+    # ── controls auto-hide (clean lyric screen while singing) ──────────────────────
+    def eventFilter(self, obj, ev):
+        if ev.type() in (QEvent.Type.KeyPress, QEvent.Type.MouseMove, QEvent.Type.MouseButtonPress):
+            if self.stack.currentWidget() is self.player_page:
+                self.poke_controls()
+        return False
+
+    def poke_controls(self):
+        if not hasattr(self, "controls_card"):
+            return
+        self.controls_card.show()
+        self.controls_timer.start(7000)
+
+    def hide_controls(self):
+        if self.is_playing and not self.is_paused and self.stack.currentWidget() is self.player_page:
+            self.controls_card.hide()
+
+    def hide_score(self):
+        self.center_stack.setCurrentIndex(0)
 
     def check_usb_and_media(self):
         conf_dir = self.config.get("SONGS_DIR", "auto")
@@ -1857,6 +2892,8 @@ class KaraokeApp(QWidget):
                 if self.db:
                     self.db.close()
                     self.db = None
+            self.song_count = 0
+            self.count_lbl.setText("0 songs")
             self.stack.setCurrentWidget(self.no_usb_page)
             return
 
@@ -1871,7 +2908,7 @@ class KaraokeApp(QWidget):
         if not self.songs_dir:
             return
 
-        self.status_lbl.setText("Indexing songs in background...")
+        self.status_lbl.setText("Indexing songs…")
         self.index_progress_bar.setValue(0)
         self.index_progress_bar.show()
 
@@ -1883,7 +2920,7 @@ class KaraokeApp(QWidget):
     def on_indexing_progress(self, current, total):
         pct = int((current / total) * 100) if total > 0 else 0
         self.index_progress_bar.setValue(pct)
-        self.status_lbl.setText(f"Indexing songs: {current}/{total}...")
+        self.status_lbl.setText(f"Indexing songs: {current:,} / {total:,}")
 
     def on_indexing_finished(self, count, soundfont, backgrounds, read_only_msg):
         self.index_progress_bar.hide()
@@ -1901,7 +2938,9 @@ class KaraokeApp(QWidget):
         self.backgrounds = backgrounds
         self.update_background_image()
 
-        self.status_lbl.setText(f"Loaded {count} songs from {self.songs_dir.name}{read_only_msg}")
+        self.song_count = count
+        self.count_lbl.setText(f"{count:,} songs")
+        self.status_lbl.setText(f"Loaded from {self.songs_dir.name}{read_only_msg}")
         self.filter_library()
 
         if self.stack.currentWidget() == self.no_usb_page:
@@ -1946,16 +2985,22 @@ class KaraokeApp(QWidget):
         self.update_queue_ui()
         self.status_lbl.setText(f"Reserved: [{code}] {title}")
 
+    def _set_next_up(self):
+        tag = "<span style='color:#34d399; font-weight:800;'>NEXT UP</span> &nbsp; "
+        if self.reservation_queue:
+            _, title, artist, _ = self.reservation_queue[0]
+            self.next_up_lbl.setText(f"{tag}{html.escape(title)} <span style='color:#a9a1d6;'>— {html.escape(artist)}</span>")
+        else:
+            self.next_up_lbl.setText(f"{tag}<span style='color:#a9a1d6;'>nobody yet — reserve a song!</span>")
+
     def update_queue_ui(self):
         self.queue_list.clear()
         for idx, (code, title, artist, _) in enumerate(self.reservation_queue, 1):
-            self.queue_list.addItem(f"{idx}. [{code}] {title} - {artist}")
-
-        if self.reservation_queue:
-            next_code, next_title, next_artist, _ = self.reservation_queue[0]
-            self.next_up_lbl.setText(f"NEXT UP: [{next_code}] {next_title} - {next_artist}")
-        else:
-            self.next_up_lbl.setText("NEXT UP: None (Select & press R to reserve)")
+            item = QListWidgetItem()
+            item.setData(Qt.ItemDataRole.UserRole, (idx, code, title, artist))
+            self.queue_list.addItem(item)
+        self.queue_count_lbl.setText(str(len(self.reservation_queue)))
+        self._set_next_up()
 
     def clear_reservation_queue(self):
         self.reservation_queue.clear()
@@ -1971,10 +3016,19 @@ class KaraokeApp(QWidget):
         else:
             self.stop_playback()
 
+    def refresh_chips(self):
+        self.key_lbl.setText(f"KEY {self.pitch_key:+d}" if self.pitch_key else "KEY 0")
+        self.tempo_lbl.setText(f"TEMPO {int(round(self.tempo_multiplier * 100))}%")
+
+    def set_pause_button(self, paused):
+        self.pause_btn.setText("Resume" if paused else "Pause")
+        self.pause_btn.setIcon(make_icon("play" if paused else "pause", "#ffffff", 64))
+
     def adjust_key(self, delta):
         self.pitch_key = max(-6, min(6, self.pitch_key + delta))
-        self.key_lbl.setText(f"KEY: {self.pitch_key:+d}")
-        self.status_lbl.setText(f"Key Transpose set to: {self.pitch_key:+d}")
+        self.refresh_chips()
+        self.status_lbl.setText(f"Key set to {self.pitch_key:+d}")
+        self.toast.flash(f"Key  {self.pitch_key:+d}", 1400)
         if self.is_playing and self.current_song:
             code, title, artist, filepath = self.current_song
             self.start_playback(code, title, artist, filepath)
@@ -1982,8 +3036,9 @@ class KaraokeApp(QWidget):
     def adjust_tempo(self, delta):
         self.tempo_multiplier = max(0.5, min(1.5, round(self.tempo_multiplier + delta, 2)))
         tempo_pct = int(round(self.tempo_multiplier * 100))
-        self.tempo_lbl.setText(f"TEMPO: {tempo_pct}%")
-        self.status_lbl.setText(f"Tempo set to: {tempo_pct}%")
+        self.refresh_chips()
+        self.status_lbl.setText(f"Tempo set to {tempo_pct}%")
+        self.toast.flash(f"Tempo  {tempo_pct}%", 1400)
         if self.is_playing and self.current_song:
             code, title, artist, filepath = self.current_song
             self.start_playback(code, title, artist, filepath)
@@ -2015,24 +3070,21 @@ class KaraokeApp(QWidget):
         self.stop_playback()
 
         if not self.soundfont:
-            QMessageBox.warning(self, "SoundFont Missing",
-                                "No SoundFont (.sf2) found on USB drive or system.\n"
-                                "Please place a SoundFont file (.sf2) on your USB drive.")
+            self.toast.flash("No SoundFont (.sf2) found. Put one on your USB drive.", 6000)
             return
 
         fp = Path(filepath)
         if not fp.exists():
-            QMessageBox.warning(self, "File Not Found", f"Song file missing:\n{filepath}")
+            self.toast.flash(f"Song file missing: {fp.name}", 5000)
             return
 
         self.current_song = (code, title, artist, filepath)
         self.p_code_lbl.setText(code)
         self.p_title_lbl.setText(title)
         self.p_artist_lbl.setText(artist)
-        self.key_lbl.setText(f"KEY: {self.pitch_key:+d}")
-        tempo_pct = int(round(self.tempo_multiplier * 100))
-        self.tempo_lbl.setText(f"TEMPO: {tempo_pct}%")
-        self.score_banner.hide()
+        self.refresh_chips()
+        self.hide_score()
+        self._lyric_idx = -2
 
         lines, duration, m_title, m_artist = extract_midi_lyrics_and_duration(filepath)
         if self.tempo_multiplier > 0:
@@ -2073,13 +3125,13 @@ class KaraokeApp(QWidget):
             try:
                 self.fluid_proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             except Exception as e:
-                QMessageBox.critical(self, "FluidSynth Error", f"Failed to start FluidSynth:\n{e}")
+                self.toast.flash(f"Could not start the synthesizer: {e}", 6000)
                 return
 
         self.playback_start_time = time.time()
         self.is_playing = True
         self.is_paused = False
-        self.pause_btn.setText("⏸ Pause")
+        self.set_pause_button(False)
 
         self.update_background_image()
         self.bg_timer.start()
@@ -2101,7 +3153,7 @@ class KaraokeApp(QWidget):
                     pass
             self.playback_start_time += (time.time() - self.playback_paused_at)
             self.is_paused = False
-            self.pause_btn.setText("⏸ Pause")
+            self.set_pause_button(False)
         else:
             if self.persistent_synth and self.persistent_synth.is_initialized and not self.fluid_proc:
                 self.persistent_synth.pause()
@@ -2112,7 +3164,7 @@ class KaraokeApp(QWidget):
                     pass
             self.playback_paused_at = time.time()
             self.is_paused = True
-            self.pause_btn.setText("▶ Resume")
+            self.set_pause_button(True)
 
     def show_pinoy_score_banner(self):
         """Displays videoke end-of-song score banner (real VAD or fun random with praise text)."""
@@ -2122,18 +3174,18 @@ class KaraokeApp(QWidget):
         else:
             score = random.randint(88, 100)
 
-        praise = "👏 MAGALING!"
+        praise = "MAGALING!"
         for min_s, txt in PRAISE_TEXTS:
             if score >= min_s:
                 praise = txt
                 break
 
-        self.score_banner.setText(f"SCORE: {score}\n\n{praise}")
-        self.score_banner.show()
-        self.score_timer.start(4000)
+        self.score_banner.show_result(score, praise)
+        self.center_stack.setCurrentIndex(1)
+        self.score_timer.start(5200)
 
     def hide_score_banner_and_next(self):
-        self.score_banner.hide()
+        self.hide_score()
         if self.reservation_queue:
             self.play_next_reserved_song()
         else:
@@ -2161,6 +3213,9 @@ class KaraokeApp(QWidget):
         self.is_playing = False
         self.is_paused = False
         self.current_song = None
+        self.hide_score()
+        self.controls_timer.stop()
+        self.controls_card.show()
 
         if self.stack.currentWidget() == self.player_page:
             self.stack.setCurrentWidget(self.library_page)
@@ -2213,11 +3268,29 @@ class KaraokeApp(QWidget):
 
         self.render_lyrics(elapsed)
 
+    def _segments_for_line(self, idx):
+        line = self.lyrics_lines[idx]
+        syls = line['syllables']
+        nxt = self.lyrics_lines[idx + 1]['start_sec'] if idx + 1 < len(self.lyrics_lines) else None
+        segs = []
+        for i, syl in enumerate(syls):
+            start = syl['sec']
+            if i + 1 < len(syls):
+                end = syls[i + 1]['sec']
+            else:
+                end = start + 1.0
+                if nxt is not None:
+                    end = min(end, max(start + 0.2, nxt))
+            segs.append((syl['text'], start, max(end, start + 0.05)))
+        return segs or [(line['text'], line['start_sec'], line['start_sec'] + 1.5)]
+
     def render_lyrics(self, elapsed_sec):
         if not self.lyrics_lines:
-            self.lyric_prev_lbl.setText("")
-            self.lyric_curr_lbl.setText("♪ [Instrumental / No Lyrics] ♪")
-            self.lyric_next_lbl.setText("")
+            if self._lyric_idx != -3:
+                self._lyric_idx = -3
+                self.lyric_prev_lbl.set_text("")
+                self.lyric_curr_lbl.set_text("♪   Instrumental   ♪")
+                self.lyric_next_lbl.set_text("")
             return
 
         curr_idx = -1
@@ -2227,29 +3300,20 @@ class KaraokeApp(QWidget):
             else:
                 break
 
-        if curr_idx == -1:
-            self.lyric_prev_lbl.setText("")
-            self.lyric_curr_lbl.setText("♪ ... ♪")
-            self.lyric_next_lbl.setText(self.lyrics_lines[0]['text'] if len(self.lyrics_lines) > 0 else "")
-            return
-
-        line_data = self.lyrics_lines[curr_idx]
-        prev_text = self.lyrics_lines[curr_idx - 1]['text'] if curr_idx > 0 else ""
-        next_text = self.lyrics_lines[curr_idx + 1]['text'] if curr_idx + 1 < len(self.lyrics_lines) else ""
-
-        highlighted_parts = []
-        for syl in line_data['syllables']:
-            txt = syl['text']
-            if elapsed_sec >= syl['sec']:
-                highlighted_parts.append(f"<span style='color: #00ffff;'>{txt}</span>")
+        if curr_idx != self._lyric_idx:
+            self._lyric_idx = curr_idx
+            n = len(self.lyrics_lines)
+            if curr_idx == -1:
+                self.lyric_prev_lbl.set_text("")
+                self.lyric_curr_lbl.set_text("♪   ♪   ♪")
+                self.lyric_next_lbl.set_text(self.lyrics_lines[0]['text'])
             else:
-                highlighted_parts.append(f"<span style='color: #ffffff;'>{txt}</span>")
+                self.lyric_prev_lbl.set_text(self.lyrics_lines[curr_idx - 1]['text'] if curr_idx > 0 else "")
+                self.lyric_curr_lbl.set_syllables(self._segments_for_line(curr_idx))
+                self.lyric_next_lbl.set_text(self.lyrics_lines[curr_idx + 1]['text'] if curr_idx + 1 < n else "")
 
-        curr_html = "".join(highlighted_parts)
-
-        self.lyric_prev_lbl.setText(prev_text)
-        self.lyric_curr_lbl.setText(curr_html)
-        self.lyric_next_lbl.setText(next_text)
+        if curr_idx >= 0:
+            self.lyric_curr_lbl.set_elapsed(elapsed_sec)
 
     def rotate_background(self):
         if len(self.backgrounds) > 1:
@@ -2257,17 +3321,36 @@ class KaraokeApp(QWidget):
             self.update_background_image()
 
     def update_background_image(self):
-        if self.backgrounds and self.backgrounds[self.bg_index].exists():
-            pix = QPixmap(str(self.backgrounds[self.bg_index]))
-            self.bg_label.setPixmap(pix)
+        self._cover_cache = None
+        self._cover_src = None
+        if self.backgrounds:
+            path = self.backgrounds[self.bg_index % len(self.backgrounds)]
+            if path.exists():
+                pix = QPixmap(str(path))
+                if not pix.isNull():
+                    self._cover_src = pix
+        self.update()
 
     def on_escape_pressed(self):
-        if self.stack.currentWidget() == self.player_page:
+        cur = self.stack.currentWidget()
+        if cur is self.player_page:
             self.stop_playback()
-        elif self.stack.currentWidget() == self.library_page:
-            self.close()
+        elif cur is self.settings_page:
+            self.stack.setCurrentWidget(self.library_page)
+        elif cur is self.library_page and not self.kiosk:
+            self.close()  # appliance mode never quits: there is no desktop to fall back to
 
     def closeEvent(self, event):
+        # Detach everything that can call back into this window while it is being torn down.
+        app = QApplication.instance()
+        if app:
+            app.removeEventFilter(self)
+        for tm in (self.poll_timer, self.play_timer, self.bg_timer, self.score_timer, self.controls_timer):
+            tm.stop()
+        if self.net_watcher:
+            self.net_watcher.stop()
+        if self.remote_server:
+            self.remote_server.stop()
         self.stop_playback()
         if self.db:
             self.db.close()
@@ -2278,9 +3361,10 @@ def main():
     config = load_config()
     app = QApplication(sys.argv)
     app.setApplicationName("KatoyOS Pinoy Videoke Player")
+    apply_theme(app)
 
     player = KaraokeApp(config)
-    player.show()
+    player.present()
 
     sys.exit(app.exec())
 

@@ -13,3 +13,5 @@ DEPLOY_COMPRESSION=xz
 COMPRESSION_LEVEL=6
 STAGE_LIST="stage0 stage1 stage2 stage-katoy"
 KATOY_PRUNE_KERNELS=1               # drop Pi 1/Zero and 64-bit kernels (Pi 3B uses kernel7)
+
+KATOY_KIOSK=1                       # 1 = power on straight into the karaoke player (no desktop)

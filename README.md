@@ -34,7 +34,11 @@
   <img src="assets/katoyos-karaoke-preview.png" alt="KatoyOS Karaoke Player Preview" width="750"/>
 </p>
 
-*Standalone, fullscreen Pinoy videoke player UI (`katoy-karaoke`): Built in PyQt6 with FluidSynth real-time synthesis, USB media auto-detection, song queue reservation system, key/pitch transpose controls, "NEXT UP" banner, cosmetic end-of-song scoring overlay, and real-time synchronized highlighted lyrics.*
+*The "Neon Videoke" player UI (`katoy-karaoke`): karaoke-style word-by-word lyric wipe with outlined text, glass cards, gradient song selection, a numbered reservation queue, auto-hiding controls so the lyric screen stays clean, and an animated end-of-song score card. Everything is drawn with QPainter/QSS (no emoji font, OpenGL or blur effects needed), and scales from 720p to 1080p+.*
+
+<p align="center">
+  <img src="assets/katoyos-karaoke-library-preview.png" alt="KatoyOS Karaoke Song Library" width="750"/>
+</p>
 
 ---
 
@@ -95,12 +99,12 @@ When KatoyOS boots for the first time:
   - **Pinoy Karaoke Features:** Song queue reservation system (`R` shortcut & side panel), Key/Pitch Transpose (`-`/`+` semi-tones), Tempo Adjustment (`[`/`]` 50%-150%), "NEXT UP" banner, real mic VAD scoring or fun random scoring overlay with Pinoy praise banners.
   - **Microphone Chain & Audio Routing:** PipeWire/PulseAudio low-latency dry mic monitoring via `module-loopback`, separate mic/music volume controls, and output device selection (HDMI, 3.5mm jack, USB DAC).
   - **Phone Remote Web App & Wi-Fi Onboarding:** Mobile-friendly LAN web interface (`http://<pi-ip>:8080`) served on a background thread with an idle screen QR code. If Wi-Fi is disconnected, automatically hosts a NetworkManager setup hotspot.
-  - **Appliance Kiosk Direct-Boot & Maintenance Access:** Automatically boots fullscreen into `katoy-karaoke` without desktop session overhead. Maintenance shell is accessible anytime via TTY2 (`Ctrl+Alt+F2`) or SSH as user `katoy`.
+  - **Appliance Direct-Boot (`KATOY_KIOSK=1`, default):** Power on -> Plymouth splash -> karaoke player. `katoy-karaoke.service` (enabled at build time) logs `katoy` into a real PAM/logind session on tty1 and runs `xinit` -> `katoy-karaoke-launcher` -> `katoy-karaoke`; there is no display manager and the default target is `multi-user.target`. The player paints its first frame before doing any slow work (audio chain, Wi-Fi checks and boot-time measurement are deferred/retried in the background). If the player crashes repeatedly, systemd falls back to a login prompt on tty1. Maintenance shell: TTY2 (`Ctrl+Alt+F2`) or SSH as `katoy`. Set `KATOY_KIOSK=0` in `config` to build the old LXQt desktop image instead.
   - **Cascading Config & Settings UI:** In-player graphical settings screen and support for USB root `.katoy-karaoke.conf` cascading overrides.
   - **USB Auto-Detection:** Automatically scans plugged-in USB removable flash drives (`/media/katoy`, `/media`, `/run/media/katoy`) for songs, SoundFonts (`.sf2`), and background graphics.
   - **Zero SD-Card Writes:** Main SQLite song database (`.katoy-karaoke.db`) is stored directly on the USB drive, keeping search fast across ~40,000 tracks while protecting SD-card wear.
   - **Synced Lyrics & FluidSynth Playback:** Parses MIDI lyric meta-events using `mido` to display real-time highlighted scrolling lyrics with FluidSynth audio synthesized over PipeWire.
-  - **Configuration (`/etc/katoyos/karaoke.conf`):** Supports customizing song directories (`SONGS_DIR`), SoundFont locations (`SOUNDFONT`), background images (`BACKGROUND`), audio driver (`AUDIO_DRIVER=pulseaudio`), fullscreen display (`FULLSCREEN=1`), and boot kiosk auto-launch (`KIOSK=1`).
+  - **Configuration (`/etc/katoyos/karaoke.conf`):** Supports customizing song directories (`SONGS_DIR`), SoundFont locations (`SOUNDFONT`), background images (`BACKGROUND`), audio driver (`AUDIO_DRIVER=pulseaudio`), fullscreen display (`FULLSCREEN=1`), appliance mode (`KIOSK=1`, Esc never quits the player) and the Wi-Fi setup hotspot delay (`HOTSPOT_GRACE`, default 45 s).
 
 ---
 

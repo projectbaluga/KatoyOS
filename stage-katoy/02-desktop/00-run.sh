@@ -17,8 +17,16 @@ autologin-user-timeout=0
 LDM
 
 echo /usr/sbin/lightdm > "$R/etc/X11/default-display-manager"
+if [ "${KATOY_KIOSK:-1}" = "1" ]; then
+# Appliance mode: the karaoke player is the whole UI (see 03-tools). No LightDM / graphical.target.
+on_chroot << 'CHEOF'
+systemctl set-default multi-user.target
+systemctl enable NetworkManager
+CHEOF
+else
 on_chroot << 'CHEOF'
 systemctl set-default graphical.target
 systemctl enable lightdm
 systemctl enable NetworkManager
 CHEOF
+fi

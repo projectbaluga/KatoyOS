@@ -16,3 +16,20 @@ install -m 644 files/katoy-karaoke.desktop  "$R/usr/share/applications/katoy-kar
 install -m 644 files/katoy-karaoke.conf     "$R/etc/katoyos/karaoke.conf"
 install -m 644 files/katoy-karaoke.service  "$R/etc/systemd/system/katoy-karaoke.service"
 install -m 644 files/katoy-powerwatch.desktop "$R/etc/xdg/autostart/katoy-powerwatch.desktop"
+
+install -d "$R/etc/X11"
+install -m 644 files/Xwrapper.config "$R/etc/X11/Xwrapper.config"
+
+# ── Appliance (kiosk) boot: power on -> Plymouth splash -> karaoke player. No display manager, no desktop. ──
+# Done with plain symlinks instead of `systemctl enable` so it also works (and is testable) outside a chroot.
+if [ "${KATOY_KIOSK:-1}" = "1" ]; then
+	KUSER="${FIRST_USER_NAME:-katoy}"
+	sed -i "s/^User=.*/User=${KUSER}/" "$R/etc/systemd/system/katoy-karaoke.service"
+	install -d "$R/etc/systemd/system/multi-user.target.wants"
+	ln -sf /etc/systemd/system/katoy-karaoke.service "$R/etc/systemd/system/multi-user.target.wants/katoy-karaoke.service"
+	ln -sf /lib/systemd/system/multi-user.target "$R/etc/systemd/system/default.target"
+	rm -f "$R/etc/systemd/system/display-manager.service"
+	# Keep the user's systemd instance (PipeWire audio) alive independent of the tty1 session.
+	install -d "$R/var/lib/systemd/linger"
+	: > "$R/var/lib/systemd/linger/${KUSER}"
+fi

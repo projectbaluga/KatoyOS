@@ -178,3 +178,4 @@ All scripts in KatoyOS are validated with `bash -n`, `python -m py_compile`, and
 - Asset generator pipeline: **Passed**
 - Helper input validation tests: **Passed**
 - Build script Docker integration: **Verified**
+- Image & Package Footprint Measurements (Phase 4): **Pending on-hardware / pi-gen build** (Target `.img.xz` compressed size: ~700 MB; Target idle RAM: <400 MB).

@@ -577,7 +577,7 @@ function loadQueue(){
             if self.bridge_signals:
                 self.bridge_signals.skip_song.emit()
             self.send_json({"status": "ok"})
-        elif path == "/wifi":
+        elif path in ("/wifi", "/setup"):
             ssid = params.get("ssid", [""])[0]
             passw = params.get("password", [""])[0]
             if ssid:

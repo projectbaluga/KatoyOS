@@ -78,6 +78,44 @@ def test_parse_nmcli_wifi_list():
     assert parse_fn("") == []
 
 
+def test_wifi_setup_route_alias():
+    # Verify that RemoteRequestHandler handles both /wifi and /setup routes
+    import io
+
+    handler = kk["RemoteRequestHandler"]
+
+    def create_mock_handler(target_path):
+        class DummyHandler(handler):
+            def __init__(self, path):
+                self.path = path
+                self.wfile = io.BytesIO()
+                self.rfile = io.BytesIO()
+                self.response_code = None
+                self.app_instance = None
+                self.bridge_signals = None
+
+            def send_response(self, code, message=None):
+                self.response_code = code
+
+            def send_header(self, keyword, value):
+                pass
+
+            def end_headers(self):
+                pass
+
+        return DummyHandler(target_path)
+
+    h_wifi = create_mock_handler("/wifi")
+    h_wifi.do_GET()
+    assert h_wifi.response_code == 200
+    assert b"KatoyOS Wi-Fi Setup" in h_wifi.wfile.getvalue()
+
+    h_setup = create_mock_handler("/setup")
+    h_setup.do_GET()
+    assert h_setup.response_code == 200
+    assert b"KatoyOS Wi-Fi Setup" in h_setup.wfile.getvalue()
+
+
 def test_parse_systemd_analyze_output():
     parse_fn = kk["parse_systemd_analyze_output"]
 

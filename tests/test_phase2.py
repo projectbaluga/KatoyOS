@@ -57,3 +57,25 @@ def test_generate_qr_matrix():
     assert matrix[0][0] is True
     assert matrix[0][6] is True
     assert matrix[6][0] is True
+
+
+def test_parse_nmcli_general_state():
+    parse_fn = kk["parse_nmcli_general_state"]
+
+    assert parse_fn("connected\n") == "connected"
+    assert parse_fn("connected (local only)") == "limited"
+    assert parse_fn("disconnected") == "disconnected"
+    assert parse_fn("") == "unknown"
+
+
+def test_parse_systemd_analyze_output():
+    parse_fn = kk["parse_systemd_analyze_output"]
+
+    out = "Startup finished in 4.120s (kernel) + 17.340s (userspace) = 21.460s\ngraphical.target reached after 21.460s"
+    parsed = parse_fn(out)
+    assert parsed is not None
+    assert "21.460s" in parsed
+    assert "(kernel) + 17.340s (userspace)" in parsed
+    assert "target ~25s" in parsed
+
+    assert parse_fn("") is None

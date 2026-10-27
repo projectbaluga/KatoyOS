@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=KatoyOS Karaoke
+Comment=Play MIDI/KAR karaoke songs from a USB drive
+Exec=katoy-karaoke
+Icon=katoyos
+Categories=AudioVideo;Audio;Player;

@@ -1,0 +1,33 @@
+# X11 Appliance Environment
+xserver-xorg-core
+xserver-xorg-input-libinput
+xinit
+openbox
+udiskie
+qterminal
+# system services
+network-manager
+polkitd
+pkexec
+upower
+udisks2
+gvfs
+gvfs-fuse
+dbus-user-session
+xdg-user-dirs
+xdg-utils
+libnotify-bin
+# audio
+pipewire
+pipewire-pulse
+wireplumber
+pavucontrol-qt
+timgm6mb-soundfont
+pulseaudio-utils
+alsa-utils
+# boot splash + Welcome app runtime
+plymouth
+python3-pyqt6
+python3-qrcode
+x11-xkb-utils
+xkb-data

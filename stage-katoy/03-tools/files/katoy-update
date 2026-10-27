@@ -1,0 +1,39 @@
+#!/bin/bash
+set -e
+
+echo "=== KatoyOS System Updater ==="
+
+# Check if OverlayFS read-only root is active
+if grep -q "overlay" /proc/mounts; then
+    echo "WARNING: KatoyOS is running in Read-Only OverlayFS Mode."
+    echo "Package updates performed in this mode will NOT persist across reboots."
+    echo
+    echo "Options:"
+    echo " 1) Toggle Maintenance Mode (disable OverlayFS, reboot to apply updates permanently)"
+    echo " 2) Proceed with temporary update anyway"
+    echo " 3) Exit"
+    read -rp "Select option [1-3]: " opt
+    case "$opt" in
+        1)
+            echo "Switching to Maintenance Mode..."
+            sudo raspi-config nonint do_overlayfs 1
+            echo "OverlayFS disabled. System will now reboot into Maintenance Mode."
+            read -rp "Press Enter to reboot now..."
+            sudo reboot
+            exit 0
+            ;;
+        2)
+            echo "Proceeding with temporary updates..."
+            ;;
+        *)
+            echo "Update cancelled."
+            exit 0
+            ;;
+    esac
+fi
+
+echo "Updating KatoyOS packages..."
+sudo apt update && sudo apt full-upgrade -y
+echo
+echo "Done. Restart if the kernel or system packages were updated."
+read -rp "Press Enter to close."

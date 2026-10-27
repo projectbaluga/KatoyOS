@@ -1,0 +1,15 @@
+IMG_NAME='KatoyOS'
+RELEASE=trixie                      # must match the pi-gen tag (see build.sh)
+TARGET_HOSTNAME=katoyos
+FIRST_USER_NAME=katoy
+FIRST_USER_PASS=changeme            # the Welcome app asks the user to change this
+DISABLE_FIRST_BOOT_USER_RENAME=1
+LOCALE_DEFAULT=en_US.UTF-8
+KEYBOARD_KEYMAP=us
+KEYBOARD_LAYOUT="English (US)"
+TIMEZONE_DEFAULT=UTC
+ENABLE_SSH=0
+DEPLOY_COMPRESSION=xz
+COMPRESSION_LEVEL=6
+STAGE_LIST="stage0 stage1 stage2 stage-katoy"
+KATOY_PRUNE_KERNELS=1               # drop Pi 1/Zero and 64-bit kernels (Pi 3B uses kernel7)

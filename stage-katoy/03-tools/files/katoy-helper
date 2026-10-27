@@ -1,0 +1,35 @@
+#!/bin/bash
+# Privileged helper for the Welcome app. Runs via pkexec; only ever touches the calling user.
+set -euo pipefail
+[ -n "${PKEXEC_UID:-}" ] || { echo "run via pkexec" >&2; exit 2; }
+USER_NAME="$(id -nu "$PKEXEC_UID")"
+case "${1:-}" in
+	set-password)
+		IFS= read -r pw
+		[ "${#pw}" -ge 8 ] || { echo "password too short" >&2; exit 1; }
+		printf '%s:%s\n' "$USER_NAME" "$pw" | chpasswd ;;
+	set-timezone)
+		tz="${2:-}"
+		[[ "$tz" =~ ^[A-Za-z0-9_+/-]+$ ]] && [ -f "/usr/share/zoneinfo/$tz" ] || { echo "bad timezone" >&2; exit 1; }
+		timedatectl set-timezone "$tz" ;;
+	set-wifi-country)
+		cc="${2:-}"
+		[[ "$cc" =~ ^[A-Z]{2}$ ]] || { echo "bad country" >&2; exit 1; }
+		raspi-config nonint do_wifi_country "$cc" ;;
+	set-keyboard)
+		kb="${2:-}"
+		[[ "$kb" =~ ^[a-z0-9_]+$ ]] || { echo "bad layout" >&2; exit 1; }
+		localectl set-x11-keymap "$kb" ;;
+	set-wifi-credentials)
+		ssid="${2:-}"
+		pass="${3:-}"
+		[ -n "$ssid" ] || { echo "bad ssid" >&2; exit 1; }
+		nmcli connection down Hotspot >/dev/null 2>&1 || nmcli device disconnect wlan0 >/dev/null 2>&1 || true
+		if nmcli device wifi connect "$ssid" password "$pass"; then
+			echo '{"status":"ok","connected":true,"ssid":"'"$ssid"'"}' > /tmp/katoy-wifi-status.json
+		else
+			echo '{"status":"error","connected":false,"ssid":"'"$ssid"'"}' > /tmp/katoy-wifi-status.json
+			exit 1
+		fi ;;
+	*) echo "unknown action" >&2; exit 2 ;;
+esac

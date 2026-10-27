@@ -93,7 +93,7 @@ When KatoyOS boots for the first time:
 - **`katoy-update`** (`/usr/bin/katoy-update`): Graphical menu tool launching system package upgrade in `qterminal`.
 - **`katoy-karaoke`** (`/usr/bin/katoy-karaoke`): Fullscreen PyQt6 standalone Pinoy videoke MIDI/KAR player.
   - **Pinoy Karaoke Features:** Song queue reservation system (`R` shortcut & side panel), Key/Pitch Transpose (`-`/`+` semi-tones), Tempo Adjustment (`[`/`]` 50%-150%), "NEXT UP" banner, real mic VAD scoring or fun random scoring overlay with Pinoy praise banners.
-  - **Microphone Chain & Audio Routing:** PipeWire/PulseAudio mic monitoring with latency-optimized loopback, volume controls, reverb toggle, and output device selection (HDMI, 3.5mm jack, USB DAC).
+  - **Microphone Chain & Audio Routing:** PipeWire/PulseAudio low-latency dry mic monitoring via `module-loopback`, separate mic/music volume controls, and output device selection (HDMI, 3.5mm jack, USB DAC).
   - **Phone Remote Web App:** Mobile-friendly LAN web interface (`http://<pi-ip>:8080`) served on a background thread with an idle screen QR code for song search, reservation, queue management, key transpose, and playback control.
   - **Cascading Config & Settings UI:** In-player graphical settings screen and support for USB root `.katoy-karaoke.conf` cascading overrides.
   - **USB Auto-Detection:** Automatically scans plugged-in USB removable flash drives (`/media/katoy`, `/media`, `/run/media/katoy`) for songs, SoundFonts (`.sf2`), and background graphics.

@@ -37,12 +37,36 @@ cat > "$R/etc/systemd/system.conf.d/watchdog.conf" <<WD
 RuntimeWatchdogSec=15s
 WD
 
-# Pi 3B boots kernel7.img; the Pi 1/Zero (v6) and 64-bit (v8) kernels are dead weight here.
+# Enable OverlayFS Read-Only Root with RAM Overlay for power-cut resilience
+if [ "${KATOY_OVERLAYFS:-1}" = "1" ]; then
+on_chroot << 'CHEOF'
+if command -v raspi-config >/dev/null 2>&1; then
+	raspi-config nonint do_overlayfs 0 || true
+fi
+CHEOF
+fi
+
+# Package Slimming Stage: Purge unneeded base image packages with dry-run protection
+if [ "${KATOY_SLIM_IMAGE:-1}" = "1" ]; then
+on_chroot << 'CHEOF'
+slim_pkgs="build-essential gdb manpages-dev man-db mkvtoolnix v4l-utils rpicam-apps-lite p7zip-full libmtp-runtime lua5.1 luajit"
+purge_list=""
+for p in $slim_pkgs; do
+	dpkg -s "$p" >/dev/null 2>&1 && purge_list="$purge_list $p"
+done
+if [ -n "$purge_list" ]; then
+	echo "Purging unneeded base packages for appliance slimming: $purge_list"
+	apt-get purge -y $purge_list || true
+fi
+CHEOF
+fi
+
+# Pi 3B boots kernel7.img; non-v7 kernels (v6, v7l, v8, 2712) and matching headers are dead weight here.
 # Removal is skipped if apt would also remove anything that is not a kernel package.
 if [ "${KATOY_PRUNE_KERNELS:-1}" = "1" ]; then
 on_chroot << 'CHEOF'
 pkgs=""
-for p in linux-image-rpi-v6 linux-image-rpi-v8 linux-headers-rpi-v6 linux-headers-rpi-v8; do
+for p in linux-image-rpi-v6 linux-image-rpi-v7l linux-image-rpi-v8 linux-image-rpi-2712 linux-headers-rpi-v6 linux-headers-rpi-v7l linux-headers-rpi-v8 linux-headers-rpi-2712; do
 	dpkg -s "$p" >/dev/null 2>&1 && pkgs="$pkgs $p"
 done
 if [ -n "$pkgs" ]; then

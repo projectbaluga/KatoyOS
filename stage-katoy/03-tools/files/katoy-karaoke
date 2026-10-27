@@ -586,11 +586,51 @@ function loadQueue(){
                         ["pkexec", "/usr/lib/katoyos/helper", "set-wifi-credentials", ssid, passw],
                         check=True
                     )
-                    self.send_json({"status": "ok", "msg": f"Wi-Fi credentials for {ssid} applied!"})
+                    self.send_json({"status": "ok", "msg": f"Wi-Fi credentials for {ssid} applied! Connecting..."})
                 except Exception as e:
                     self.send_json({"error": f"Failed to connect: {e}"}, 500)
             else:
-                self.send_json({"error": "Missing SSID"}, 400)
+                # GET /wifi: Serve HTML setup page with SSID scan
+                wifi_out = ""
+                if shutil.which("nmcli"):
+                    try:
+                        res = subprocess.run(["nmcli", "-t", "-f", "SSID,SIGNAL,SECURITY", "device", "wifi", "list"], capture_output=True, text=True)
+                        wifi_out = res.stdout
+                    except Exception:
+                        pass
+                ssids = parse_nmcli_wifi_list(wifi_out)
+                ssid_opts = "".join(f"<option value='{s}'>{s}</option>" for s in ssids) if ssids else "<option value=''>No networks found</option>"
+
+                self.send_response(200)
+                self.send_header("Content-Type", "text/html; charset=utf-8")
+                self.end_headers()
+                html = f"""<!DOCTYPE html><html><head><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>KatoyOS Wi-Fi Onboarding</title><style>
+body {{ font-family: sans-serif; background: #0f172a; color: white; padding: 20px; margin: 0; }}
+h2 {{ color: #00d2ff; text-align: center; }}
+select, input, button {{ width: 100%; padding: 14px; margin: 8px 0; border-radius: 8px; border: none; font-size: 16px; box-sizing: border-box; }}
+select, input {{ background: #1e293b; color: white; border: 1px solid #334155; }}
+button {{ background: #10b981; color: white; font-weight: bold; cursor: pointer; margin-top: 15px; }}
+.card {{ background: #181d2a; padding: 20px; border-radius: 12px; max-width: 400px; margin: auto; }}
+</style></head><body>
+<div class="card">
+  <h2>📶 KatoyOS Wi-Fi Setup</h2>
+  <p>Select your home Wi-Fi network and enter the password:</p>
+  <label>Wi-Fi Network (SSID):</label>
+  <select id="ssid">{ssid_opts}</select>
+  <label>Password:</label>
+  <input type="password" id="pass" placeholder="Enter Wi-Fi Password">
+  <button onclick="save()">🔌 Connect Wi-Fi</button>
+</div>
+<script>
+function save(){{
+  let s=document.getElementById('ssid').value;
+  let p=document.getElementById('pass').value;
+  if(!s){{ alert('Please select an SSID'); return; }}
+  fetch(`/wifi?ssid=${{encodeURIComponent(s)}}&password=${{encodeURIComponent(p)}}`).then(r=>r.json()).then(d=>alert(d.msg||d.error));
+}}
+</script></body></html>"""
+                self.wfile.write(html.encode("utf-8"))
         else:
             self.send_json({"error": "Not Found"}, 404)
 
@@ -1326,16 +1366,18 @@ class KaraokeApp(QWidget):
 
         is_ap, ap_ssid = check_and_trigger_wifi_hotspot(self.config)
 
+        qr_target_url = f"{remote_url}/wifi" if is_ap else remote_url
+
         qr_box = QVBoxLayout()
         qr_box.setAlignment(Qt.AlignmentFlag.AlignCenter)
         qr_lbl = QLabel()
-        qr_lbl.setPixmap(create_qr_pixmap(remote_url, scale=5))
+        qr_lbl.setPixmap(create_qr_pixmap(qr_target_url, scale=5))
         qr_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
         display_text = f"📱 Phone Remote: {remote_url}"
         if is_ap:
             ap_pass = self.config.get("HOTSPOT_PASSWORD", "katoyos123")
-            display_text += f"\n📡 Wi-Fi Setup Hotspot Active: SSID '{ap_ssid}' (pass: {ap_pass})"
+            display_text += f"\n📡 Wi-Fi Setup Hotspot Active: SSID '{ap_ssid}' (pass: {ap_pass})\nScan QR to open Wi-Fi setup"
 
         qr_txt = QLabel(display_text)
         qr_txt.setFont(QFont("Inter", 13, QFont.Weight.Bold))

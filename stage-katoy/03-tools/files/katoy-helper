@@ -24,6 +24,7 @@ case "${1:-}" in
 		ssid="${2:-}"
 		pass="${3:-}"
 		[ -n "$ssid" ] || { echo "bad ssid" >&2; exit 1; }
+		nmcli connection down Hotspot >/dev/null 2>&1 || nmcli device disconnect wlan0 >/dev/null 2>&1 || true
 		nmcli device wifi connect "$ssid" password "$pass" ;;
 	*) echo "unknown action" >&2; exit 2 ;;
 esac

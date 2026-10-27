@@ -320,6 +320,24 @@ def get_local_ip():
     return IP
 
 
+def check_wifi_hotspot_status():
+    """Checks NetworkManager connection state and starts setup hotspot if disconnected."""
+    if not shutil.which("nmcli"):
+        return False, ""
+    try:
+        res = subprocess.run(["nmcli", "-t", "-g", "STATE", "general"], capture_output=True, text=True)
+        state = res.stdout.strip()
+        if "connected" not in state:
+            subprocess.run(
+                ["nmcli", "device", "wifi", "hotspot", "ifname", "wlan0", "ssid", "KatoyOS-Karaoke", "password", "katoyos123"],
+                stderr=subprocess.DEVNULL
+            )
+            return True, "KatoyOS-Karaoke"
+    except Exception:
+        pass
+    return False, ""
+
+
 def generate_qr_matrix(text):
     try:
         import qrcode
@@ -1350,7 +1368,14 @@ class KaraokeApp(QWidget):
         left_col.addLayout(action_bar)
 
         footer = QHBoxLayout()
-        self.status_lbl = QLabel("Ready")
+        uptime_sec = 0.0
+        try:
+            with open("/proc/uptime", "r") as uf:
+                uptime_sec = float(uf.read().split()[0])
+        except Exception:
+            pass
+
+        self.status_lbl = QLabel(f"Ready (App boot time target: ~25s | /proc/uptime: {uptime_sec:.1f}s)")
         self.status_lbl.setFont(QFont("Inter", 11))
         self.status_lbl.setStyleSheet("color: #8a92a6;")
 

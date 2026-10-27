@@ -5,7 +5,7 @@ polkit.addRule(function(action, subject) {
          action.id == "org.freedesktop.udisks2.encrypted-unlock" ||
          action.id == "org.freedesktop.udisks2.eject-media" ||
          action.id == "org.freedesktop.udisks2.power-off-drive") &&
-        subject.isInGroup("katoy")) {
+        (subject.user == "katoy" || subject.isInGroup("katoy"))) {
         return polkit.Result.YES;
     }
 });

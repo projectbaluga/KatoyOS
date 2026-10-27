@@ -346,6 +346,22 @@ def get_systemd_boot_time():
     return "Boot time: unmeasured (target ~25s)"
 
 
+def parse_nmcli_wifi_list(output_str):
+    """Pure helper function parsing nmcli wifi list output into structured SSIDs."""
+    if not output_str:
+        return []
+    ssids = []
+    seen = set()
+    for line in output_str.strip().splitlines():
+        parts = line.split(":")
+        if parts and parts[0].strip():
+            ssid = parts[0].strip()
+            if ssid not in seen and ssid != "--":
+                seen.add(ssid)
+                ssids.append(ssid)
+    return ssids
+
+
 def parse_nmcli_general_state(output_str):
     """Pure helper function parsing nmcli general state output."""
     if not output_str:
@@ -1318,7 +1334,8 @@ class KaraokeApp(QWidget):
 
         display_text = f"📱 Phone Remote: {remote_url}"
         if is_ap:
-            display_text += f"\n📡 Wi-Fi Setup Hotspot Active: SSID '{ap_ssid}' (pass: katoyos123)"
+            ap_pass = self.config.get("HOTSPOT_PASSWORD", "katoyos123")
+            display_text += f"\n📡 Wi-Fi Setup Hotspot Active: SSID '{ap_ssid}' (pass: {ap_pass})"
 
         qr_txt = QLabel(display_text)
         qr_txt.setFont(QFont("Inter", 13, QFont.Weight.Bold))

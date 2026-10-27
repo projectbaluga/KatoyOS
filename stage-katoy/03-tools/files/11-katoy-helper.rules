@@ -1,0 +1,7 @@
+// Polkit rule allowing katoy user to run katoy-helper without authentication
+polkit.addRule(function(action, subject) {
+    if (action.id == "os.katoy.helper" &&
+        (subject.user == "katoy" || subject.isInGroup("katoy"))) {
+        return polkit.Result.YES;
+    }
+});

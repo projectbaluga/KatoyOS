@@ -68,6 +68,16 @@ def test_parse_nmcli_general_state():
     assert parse_fn("") == "unknown"
 
 
+def test_parse_nmcli_wifi_list():
+    parse_fn = kk["parse_nmcli_wifi_list"]
+
+    raw_output = "MyHomeWiFi:80:WPA2\nOfficeWiFi:65:WPA2\n--:40:WPA2\nMyHomeWiFi:75:WPA2\n"
+    ssids = parse_fn(raw_output)
+
+    assert ssids == ["MyHomeWiFi", "OfficeWiFi"]
+    assert parse_fn("") == []
+
+
 def test_parse_systemd_analyze_output():
     parse_fn = kk["parse_systemd_analyze_output"]
 

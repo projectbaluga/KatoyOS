@@ -7,7 +7,7 @@ Wants=sound.target
 Type=simple
 User=katoy
 Environment=DISPLAY=:0
-ExecStart=/usr/bin/xinit /usr/bin/katoy-karaoke -- :0 -nocursor
+ExecStart=/usr/bin/xinit /usr/bin/katoy-karaoke-launcher -- :0 -nocursor
 Restart=always
 RestartSec=2s
 

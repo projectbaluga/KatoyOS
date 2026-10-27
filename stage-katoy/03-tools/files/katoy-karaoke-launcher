@@ -1,0 +1,16 @@
+#!/bin/bash
+# KatoyOS Karaoke Appliance Session Launcher
+
+# Start udiskie for non-desktop USB automounting under /media/katoy
+if command -v udiskie >/dev/null 2>&1; then
+    mkdir -p /media/katoy
+    udiskie -2 -s -f /media/katoy &
+fi
+
+# Start hardware throttling powerwatch daemon
+if [ -x /usr/bin/katoy-powerwatch ]; then
+    /usr/bin/katoy-powerwatch &
+fi
+
+# Launch fullscreen Karaoke application
+exec /usr/bin/katoy-karaoke

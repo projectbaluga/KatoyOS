@@ -55,8 +55,14 @@ for p in $slim_pkgs; do
 	dpkg -s "$p" >/dev/null 2>&1 && purge_list="$purge_list $p"
 done
 if [ -n "$purge_list" ]; then
-	echo "Purging unneeded base packages for appliance slimming: $purge_list"
-	apt-get purge -y $purge_list || true
+	# Dry-run guard: verify apt simulation does not remove essential packages outside slim_pkgs
+	extra=$(apt-get -s purge $purge_list | awk '/^Remv/{print $2}' | grep -vE '^(build-essential|gdb|manpages-dev|man-db|mkvtoolnix|v4l-utils|rpicam-apps-lite|p7zip-full|libmtp-runtime|lua5\.1|luajit)$' || true)
+	if [ -z "$extra" ]; then
+		echo "Purging unneeded base packages for appliance slimming: $purge_list"
+		apt-get purge -y $purge_list
+	else
+		echo "Skipping package slimming; apt dry-run would also remove collateral: $extra"
+	fi
 fi
 CHEOF
 fi

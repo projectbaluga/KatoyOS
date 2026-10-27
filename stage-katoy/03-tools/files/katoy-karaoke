@@ -523,9 +523,10 @@ class RemoteWebServer(QThread):
         handler_class.bridge_signals = self.bridge_signals
         handler_class.pin = self.pin
 
+        bind_ip = get_local_ip()
         try:
-            self.httpd = ThreadedHTTPServer(("0.0.0.0", self.port), handler_class)
-            print(f"Phone remote web server listening on port {self.port}")
+            self.httpd = ThreadedHTTPServer((bind_ip, self.port), handler_class)
+            print(f"Phone remote web server listening on {bind_ip}:{self.port}")
             self.httpd.serve_forever()
         except Exception as e:
             print(f"RemoteWebServer error: {e}")

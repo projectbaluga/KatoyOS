@@ -116,6 +116,56 @@ def test_wifi_setup_route_alias():
     assert b"KatoyOS Wi-Fi Setup" in h_setup.wfile.getvalue()
 
 
+def test_wifi_status_endpoint():
+    # Verify that /wifi/status and /api/wifi-status serve persisted status or pending
+    import io
+    from pathlib import Path
+
+    handler = kk["RemoteRequestHandler"]
+
+    def create_mock_handler(target_path):
+        class DummyHandler(handler):
+            def __init__(self, path):
+                self.path = path
+                self.wfile = io.BytesIO()
+                self.rfile = io.BytesIO()
+                self.response_code = None
+                self.app_instance = None
+                self.bridge_signals = None
+
+            def send_response(self, code, message=None):
+                self.response_code = code
+
+            def send_header(self, keyword, value):
+                pass
+
+            def end_headers(self):
+                pass
+
+        return DummyHandler(target_path)
+
+    # Test when no status file exists
+    status_file = Path("/tmp/katoy-wifi-status.json")
+    if status_file.exists():
+        status_file.unlink()
+
+    h_pending = create_mock_handler("/wifi/status")
+    h_pending.do_GET()
+    assert h_pending.response_code == 200
+    assert b"pending" in h_pending.wfile.getvalue()
+
+    # Test when status file exists
+    try:
+        status_file.write_text('{"status":"ok","connected":true,"ssid":"TestNet"}', encoding="utf-8")
+        h_ok = create_mock_handler("/api/wifi-status")
+        h_ok.do_GET()
+        assert h_ok.response_code == 200
+        assert b"TestNet" in h_ok.wfile.getvalue()
+    finally:
+        if status_file.exists():
+            status_file.unlink()
+
+
 def test_parse_systemd_analyze_output():
     parse_fn = kk["parse_systemd_analyze_output"]
 

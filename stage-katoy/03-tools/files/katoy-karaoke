@@ -577,6 +577,16 @@ function loadQueue(){
             if self.bridge_signals:
                 self.bridge_signals.skip_song.emit()
             self.send_json({"status": "ok"})
+        elif path in ("/wifi/status", "/api/wifi-status"):
+            status_file = Path("/tmp/katoy-wifi-status.json")
+            if status_file.exists():
+                try:
+                    data = json.loads(status_file.read_text(encoding="utf-8"))
+                    self.send_json(data)
+                except Exception:
+                    self.send_json({"status": "unknown"}, 200)
+            else:
+                self.send_json({"status": "pending", "msg": "No connection attempt recorded yet"}, 200)
         elif path in ("/wifi", "/setup"):
             ssid = params.get("ssid", [""])[0]
             passw = params.get("password", [""])[0]

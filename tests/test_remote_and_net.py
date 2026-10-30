@@ -1,5 +1,6 @@
 import tempfile
 import threading
+import shutil
 from pathlib import Path
 
 import pytest
@@ -38,6 +39,66 @@ def test_database_is_usable_from_other_threads():
     rows = result["rows"]["songs"] if isinstance(result["rows"], dict) else result["rows"]
     assert rows[0][0] == "00042"
     assert result["one"][1] == "Harana"
+
+
+def test_api_search_clamping_and_validation():
+    handler_class = kk["RemoteRequestHandler"]
+
+    class MockApp:
+        def __init__(self, db):
+            self.db = db
+            self.net_ap = False
+
+    class MockServer:
+        def __init__(self):
+            self.sent_json = None
+            self.sent_code = None
+
+    tmp = Path(tempfile.mkdtemp())
+    try:
+        db_path = tmp / "search_test.db"
+        db = kk["SongDatabase"](db_path)
+        with db.conn:
+            for i in range(1, 250):
+                code = f"{i:05d}"
+                db.conn.execute("INSERT INTO songs(code,title,artist,filepath,mtime) VALUES(?,?,?,?,0)",
+                                (code, f"Song {i}", "Artist", f"/{code}.mid"))
+
+        app = MockApp(db)
+        handler_class.app_instance = app
+        handler_class.pin = ""
+
+        # Test valid search & limit clamping (max 200)
+        req = handler_class.__new__(handler_class)
+        req.path = "/api/search?q=&limit=500&offset=-10"
+        json_resp = None
+        status_code = None
+        def mock_send_json(data, code=200):
+            nonlocal json_resp, status_code
+            json_resp = data
+            status_code = code
+        req.send_json = mock_send_json
+
+        req.do_GET()
+        assert status_code == 200
+        assert len(json_resp["songs"]) == 200
+        assert json_resp["total"] == 249
+
+        # Test invalid offset -> 400
+        req.path = "/api/search?offset=abc"
+        req.do_GET()
+        assert status_code == 400
+        assert "Invalid offset parameter" in json_resp["error"]
+
+        # Test invalid limit -> 400
+        req.path = "/api/search?limit=xyz"
+        req.do_GET()
+        assert status_code == 400
+        assert "Invalid limit parameter" in json_resp["error"]
+
+        db.close()
+    finally:
+        shutil.rmtree(tmp)
 
 
 def test_service_unit_has_no_ordering_cycle_and_a_login_session():

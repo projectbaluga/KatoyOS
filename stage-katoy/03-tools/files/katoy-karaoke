@@ -44,11 +44,14 @@ class SongIndexerWorker(QThread):
     """Background thread worker for indexing song library and searching media assets."""
 
     progress = pyqtSignal(int, int)
-    finished = pyqtSignal(int, object, object, str)
+    finished = pyqtSignal(int, object, object, str, object)
 
     def __init__(self, usb_dir, config, force=False):
         super().__init__()
-        self.usb_dir = Path(usb_dir)
+        if isinstance(usb_dir, (list, tuple)):
+            self.usb_dir = [Path(d) for d in usb_dir]
+        else:
+            self.usb_dir = Path(usb_dir)
         self.config = config
         self.force = force
 
@@ -58,6 +61,7 @@ class SongIndexerWorker(QThread):
         db_instance = None
         count = 0
         read_only_msg = ""
+        actual_db_path = db_path
 
         def prog_cb(cur, total):
             self.progress.emit(cur, total)
@@ -78,18 +82,24 @@ class SongIndexerWorker(QThread):
             try:
                 fallback_dir.mkdir(parents=True, exist_ok=True)
                 safe_name = re.sub(r'[^a-zA-Z0-9_-]', '_', first_dir.name)
-                fallback_db_path = fallback_dir / f".katoy-karaoke-{safe_name}.db"
-                db_instance = SongDatabase(fallback_db_path)
+                actual_db_path = fallback_dir / f".katoy-karaoke-{safe_name}.db"
+                db_instance = SongDatabase(actual_db_path)
                 count = db_instance.index_songs(self.usb_dir, force=self.force, progress_callback=prog_cb)
                 read_only_msg = " (read-only mode)"
             except Exception as e:
                 print(f"Fallback indexing failed: {e}")
 
+        if db_instance:
+            try:
+                db_instance.close()
+            except Exception:
+                pass
+
         usb_ref = first_dir
         sf = find_soundfont(self.config.get("SOUNDFONT"), usb_ref)
         bgs = find_backgrounds(self.config.get("BACKGROUND"), usb_ref)
 
-        self.finished.emit(count, sf, bgs, read_only_msg)
+        self.finished.emit(count, sf, bgs, read_only_msg, actual_db_path)
 
 import mido
 
@@ -771,14 +781,22 @@ class RemoteRequestHandler(BaseHTTPRequestHandler):
             self.send_html(REMOTE_HTML)
         elif path == "/api/search":
             q = params.get("q", [""])[0]
-            try:
-                offset = int(params.get("offset", ["0"])[0])
-            except ValueError:
-                offset = 0
-            try:
-                limit = int(params.get("limit", ["20"])[0])
-            except ValueError:
-                limit = 20
+            offset = 0
+            limit = 20
+            if "offset" in params:
+                try:
+                    offset = int(params["offset"][0])
+                except ValueError:
+                    self.send_json({"error": "Invalid offset parameter"}, 400)
+                    return
+            if "limit" in params:
+                try:
+                    limit = int(params["limit"][0])
+                except ValueError:
+                    self.send_json({"error": "Invalid limit parameter"}, 400)
+                    return
+            offset = max(0, offset)
+            limit = max(1, min(limit, 200))
             self.send_json(app.db.search(q, offset=offset, limit=limit) if (app and app.db) else {"songs": [], "total": 0})
         elif path == "/api/reserve":
             # The phone only sends a song *code*; the file path always comes from our own index.
@@ -2925,7 +2943,12 @@ class KaraokeApp(QWidget):
     def check_usb_and_media(self):
         conf_dir = self.config.get("SONGS_DIR", "auto")
         builtin_dir = Path("/usr/share/katoy/songs")
-        builtin_exists = builtin_dir.exists() and any(builtin_dir.iterdir()) if builtin_dir.exists() else False
+        builtin_exists = False
+        if builtin_dir.exists():
+            try:
+                builtin_exists = any(builtin_dir.iterdir())
+            except OSError:
+                builtin_exists = False
 
         target_dirs = []
         if conf_dir == "auto":
@@ -2980,13 +3003,8 @@ class KaraokeApp(QWidget):
         self.index_progress_bar.setValue(pct)
         self.status_lbl.setText(f"Indexing songs: {current:,} / {total:,}")
 
-    def on_indexing_finished(self, count, soundfont, backgrounds, read_only_msg):
+    def on_indexing_finished(self, count, soundfont, backgrounds, read_only_msg, db_path):
         self.index_progress_bar.hide()
-        first_dir = self.songs_dir[0] if isinstance(self.songs_dir, (list, tuple)) else self.songs_dir
-        db_path = (first_dir / ".katoy-karaoke.db") if first_dir.is_dir() else (first_dir.parent / ".katoy-karaoke.db")
-        if read_only_msg:
-            safe_name = re.sub(r'[^a-zA-Z0-9_-]', '_', first_dir.name)
-            db_path = Path("/tmp/katoy_karaoke") / f".katoy-karaoke-{safe_name}.db"
 
         try:
             self.db = SongDatabase(db_path)
@@ -2999,7 +3017,11 @@ class KaraokeApp(QWidget):
 
         self.song_count = count
         self.count_lbl.setText(f"{count:,} songs")
-        dir_name = first_dir.name if not isinstance(self.songs_dir, (list, tuple)) else f"{len(self.songs_dir)} sources"
+        if self.songs_dir:
+            first_dir = self.songs_dir[0] if isinstance(self.songs_dir, (list, tuple)) else self.songs_dir
+            dir_name = first_dir.name if not isinstance(self.songs_dir, (list, tuple)) else f"{len(self.songs_dir)} sources"
+        else:
+            dir_name = "disconnected source"
         self.status_lbl.setText(f"Loaded from {dir_name}{read_only_msg}")
         self.filter_library()
 

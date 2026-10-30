@@ -53,7 +53,7 @@ KatoyOS delivers a responsive, zero-configuration out-of-the-box desktop experie
 - **Privilege Separation (`katoy-helper` + Polkit):** Administrative tasks configured in the Welcome wizard use a dedicated, strictly validated helper binary controlled by Polkit authorization policies (`os.katoy.helper`), avoiding the safety risks of running complex GUIs as root.
 - **Hardware Watchdog (`katoy-powerwatch`):** Actively monitors hardware status registers (`/sys/devices/platform/soc/soc:firmware/get_throttled`) to issue desktop notifications upon detecting power supply drops (under-voltage) or soft thermal throttling.
 - **SD-Card Resilience:** System logs configured to RAM-only (`Storage=volatile` with `32M` ceiling in `journald`), combined with zram compressed swap (`rpi-swap`), significantly reduces physical flash wear.
-- **Seamless Updates (`katoy-update` & Unattended Security Updates):** Includes a one-click graphical terminal updater alongside `unattended-upgrades` pre-configured for automated security patches.
+- **Seamless Updates (`katoy-update`):** Includes a one-click graphical terminal updater for performing system and package updates on demand.
 - **Standalone Karaoke System (KaraOkePi / `katoy-karaoke`):** Dedicated fullscreen MIDI/KAR player application powered by FluidSynth and PipeWire audio synthesis. Keeps SD-card rootfs footprint minimal by reading song files, SoundFonts, and background media directly from removable USB drives with fast local SQLite song indexing.
 
 ---

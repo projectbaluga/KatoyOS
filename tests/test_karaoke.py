@@ -148,8 +148,9 @@ def test_indexing_multiple_directories():
         assert count == 2
 
         res = db.search("")
-        assert len(res) == 2
-        titles = [r[1] for r in res]
+        rows = res["songs"] if isinstance(res, dict) else res
+        assert len(rows) == 2
+        titles = [r[1] for r in rows]
         assert "SongUSB" in titles
         assert "SongSD" in titles
 

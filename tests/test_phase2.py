@@ -108,12 +108,12 @@ def test_wifi_setup_route_alias():
     h_wifi = create_mock_handler("/wifi")
     h_wifi.do_GET()
     assert h_wifi.response_code == 200
-    assert b"KatoyOS Wi-Fi Setup" in h_wifi.wfile.getvalue()
+    assert b"KaraOkePi Wi-Fi Setup" in h_wifi.wfile.getvalue()
 
     h_setup = create_mock_handler("/setup")
     h_setup.do_GET()
     assert h_setup.response_code == 200
-    assert b"KatoyOS Wi-Fi Setup" in h_setup.wfile.getvalue()
+    assert b"KaraOkePi Wi-Fi Setup" in h_setup.wfile.getvalue()
 
 
 def test_wifi_status_endpoint():

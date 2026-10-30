@@ -110,8 +110,8 @@ class Wizard(QWidget):
             page("Choose a password", "The default password is public knowledge. Pick your own "
                  "(at least 8 characters), or leave blank to keep the default for now.", pform),
             page("All set!", "Press Finish to apply your choices. You may be asked for your current "
-                 "password once.\n\nTip: open the main menu (the K button) to find apps, and run "
-                 "'KatoyOS Update' now and then to get the latest fixes."),
+                 "password once.\n\nTip: open the main menu (the K button) to find apps, and launch "
+                 "KaraOkePi or run 'KatoyOS Update' now and then to get the latest fixes."),
         ]
         self.stack = QStackedWidget()
         for p in self.pages:

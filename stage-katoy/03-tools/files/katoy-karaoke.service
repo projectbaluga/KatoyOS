@@ -1,5 +1,5 @@
 [Unit]
-Description=KatoyOS Karaoke appliance (boots straight into the player)
+Description=KaraOkePi karaoke appliance (boots straight into the player)
 # Same ordering getty@tty1 uses, so we take over tty1 right after the boot splash.
 # NOTE: deliberately NOT ordered after graphical.target - we are WantedBy multi-user.target,
 # so that would be an ordering cycle and systemd would silently drop the job.

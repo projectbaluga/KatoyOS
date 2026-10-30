@@ -580,7 +580,7 @@ REMOTE_HTML = r"""<!DOCTYPE html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#0a061f">
-<title>KatoyOS Remote</title>
+<title>KaraOkePi Remote</title>
 <style>
 :root{--pink:#ff2e93;--violet:#8b3cf0;--cyan:#22d3ee;--gold:#ffd166;--mint:#34d399;--muted:#a9a1d6}
 *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
@@ -616,7 +616,7 @@ button.m{border:0;color:#052e22;background:linear-gradient(90deg,var(--mint),var
 #toast{position:fixed;left:50%;bottom:calc(24px + env(safe-area-inset-bottom));transform:translateX(-50%);background:rgba(10,6,31,.95);border:1px solid var(--pink);padding:12px 20px;border-radius:999px;font-weight:700;opacity:0;pointer-events:none;transition:opacity .2s;max-width:90vw}
 #toast.on{opacity:1}
 </style></head><body><div class="wrap">
-<header><div class="logo">&#127908;</div><h1>KatoyOS Remote</h1></header>
+<header><div class="logo">&#127908;</div><h1>KaraOkePi Remote</h1></header>
 
 <div class="card np"><div class="lbl">NOW SINGING</div>
  <div class="t" id="np_t">Nothing playing</div><div class="a" id="np_a">Reserve a song below</div>
@@ -641,17 +641,34 @@ const esc=s=>String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;'
 async function api(p){const u=p+(PIN?(p.includes('?')?'&':'?')+'pin='+encodeURIComponent(PIN):'');
  try{const r=await fetch(u);return await r.json()}catch(e){return{error:'Connection lost'}}}
 let tt;function toast(m){const t=$('#toast');t.textContent=m;t.classList.add('on');clearTimeout(tt);tt=setTimeout(()=>t.classList.remove('on'),2200)}
-let found=[],deb;
-async function search(){
- const d=await api('/api/search?q='+encodeURIComponent($('#q').value));
- found=Array.isArray(d)?d:[];
- const shown=found.slice(0,60);
- $('#results').innerHTML=shown.map((s,i)=>`<div class="song"><div class="c">${esc(s[0])}</div><div class="i"><b>${esc(s[1])}</b><small>${esc(s[2])}</small></div><button class="p" data-i="${i}">Reserve</button></div>`).join('')
-  +(found.length>60?`<div class="muted" style="padding:10px 4px">Showing 60 of ${found.length}. Keep typing to narrow it down.</div>`:'')
-  +(found.length?'':'<div class="muted" style="padding:10px 4px">No songs found</div>');
+let found=[],totalSongs=0,curOffset=0,limit=20,deb;
+async function search(reset=true){
+ const q=$('#q').value.trim();
+ if(!q){
+  found=[];totalSongs=0;curOffset=0;
+  $('#results').innerHTML='<div class="muted" style="padding:10px 4px">Type to search, or enter a song code</div>';
+  return;
+ }
+ if(reset){curOffset=0;found=[]}
+ const d=await api(`/api/search?q=${encodeURIComponent(q)}&offset=${curOffset}&limit=${limit}`);
+ const newSongs=d&&d.songs?d.songs:(Array.isArray(d)?d:[]);
+ totalSongs=d&&typeof d.total==='number'?d.total:newSongs.length;
+ found=reset?newSongs:found.concat(newSongs);
+ renderResults();
 }
-$('#q').addEventListener('input',()=>{clearTimeout(deb);deb=setTimeout(search,280)});
-$('#q').addEventListener('keydown',e=>{if(e.key==='Enter'){clearTimeout(deb);search();e.target.blur()}});
+function renderResults(){
+ if(!found.length){
+  $('#results').innerHTML='<div class="muted" style="padding:10px 4px">No songs found</div>';
+  return;
+ }
+ let html=found.map((s,i)=>`<div class="song"><div class="c">${esc(s[0])}</div><div class="i"><b>${esc(s[1])}</b><small>${esc(s[2])}</small></div><button class="p" data-i="${i}">Reserve</button></div>`).join('');
+ html+=`<div class="muted" style="padding:10px 4px;display:flex;justify-content:space-between;align-items:center"><span>Showing ${found.length} of ${totalSongs}</span>${found.length<totalSongs?'<button id="load_more" style="padding:8px 16px;font-size:14px">Load more</button>':''}</div>`;
+ $('#results').innerHTML=html;
+ const lm=$('#load_more');
+ if(lm){lm.addEventListener('click',()=>{curOffset+=limit;search(false)});}
+}
+$('#q').addEventListener('input',()=>{clearTimeout(deb);deb=setTimeout(()=>search(true),280)});
+$('#q').addEventListener('keydown',e=>{if(e.key==='Enter'){clearTimeout(deb);search(true);e.target.blur()}});
 $('#results').addEventListener('click',async e=>{const b=e.target.closest('button[data-i]');if(!b)return;
  const s=found[+b.dataset.i];const d=await api('/api/reserve?code='+encodeURIComponent(s[0]));toast(d.msg||d.error);state()});
 document.querySelectorAll('button[data-act]').forEach(b=>b.addEventListener('click',async()=>{await api(b.dataset.act);state()}));
@@ -662,13 +679,13 @@ async function state(){
  $('#np_k').textContent='KEY '+(d.key>0?'+':'')+d.key;$('#np_p').textContent='TEMPO '+d.tempo+'%';
  $('#queue').innerHTML=d.queue.length?d.queue.map((s,i)=>`<div class="q"><div class="n">${i+1}</div><div><b>${esc(s[1])}</b><br><small class="muted">${esc(s[0])} \u00b7 ${esc(s[2])}</small></div></div>`).join(''):'Queue is empty';
 }
-search();state();setInterval(state,2000);
+search(true);state();setInterval(state,2000);
 </script></body></html>"""
 
 WIFI_HTML = r"""<!DOCTYPE html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>KatoyOS Wi-Fi Setup</title>
+<title>KaraOkePi Wi-Fi Setup</title>
 <style>
 *{box-sizing:border-box}
 body{margin:0;min-height:100vh;display:grid;place-items:center;padding:20px;color:#f5f3ff;font-family:Inter,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
@@ -754,7 +771,15 @@ class RemoteRequestHandler(BaseHTTPRequestHandler):
             self.send_html(REMOTE_HTML)
         elif path == "/api/search":
             q = params.get("q", [""])[0]
-            self.send_json(app.db.search(q) if (app and app.db) else [])
+            try:
+                offset = int(params.get("offset", ["0"])[0])
+            except ValueError:
+                offset = 0
+            try:
+                limit = int(params.get("limit", ["20"])[0])
+            except ValueError:
+                limit = 20
+            self.send_json(app.db.search(q, offset=offset, limit=limit) if (app and app.db) else {"songs": [], "total": 0})
         elif path == "/api/reserve":
             # The phone only sends a song *code*; the file path always comes from our own index.
             code = params.get("code", [""])[0].strip()
@@ -1388,19 +1413,29 @@ class SongDatabase:
 
         return len(audio_files)
 
-    def search(self, query=""):
+    def search(self, query="", offset=0, limit=1000):
         with self._lock:
             cur = self.conn.cursor()
-            if not query.strip():
-                cur.execute("SELECT code, title, artist, filepath FROM songs ORDER BY code ASC LIMIT 1000")
+            q_str = query.strip()
+            if not q_str:
+                cur.execute("SELECT COUNT(*) FROM songs")
+                total = cur.fetchone()[0]
+                cur.execute("SELECT code, title, artist, filepath FROM songs ORDER BY code ASC LIMIT ? OFFSET ?", (limit, offset))
+                rows = cur.fetchall()
             else:
-                q = f"%{query.strip()}%"
+                q = f"%{q_str}%"
+                cur.execute("""
+                    SELECT COUNT(*) FROM songs
+                    WHERE code LIKE ? OR title LIKE ? OR artist LIKE ? OR filepath LIKE ?
+                """, (q, q, q, q))
+                total = cur.fetchone()[0]
                 cur.execute("""
                     SELECT code, title, artist, filepath FROM songs
                     WHERE code LIKE ? OR title LIKE ? OR artist LIKE ? OR filepath LIKE ?
-                    ORDER BY code ASC LIMIT 1000
-                """, (q, q, q, q))
-            return cur.fetchall()
+                    ORDER BY code ASC LIMIT ? OFFSET ?
+                """, (q, q, q, q, limit, offset))
+                rows = cur.fetchall()
+            return {"songs": rows, "total": total}
 
     def get_by_code(self, code_str):
         with self._lock:
@@ -2224,7 +2259,7 @@ class KaraokeApp(QWidget):
     # ── UI construction ─────────────────────────────────────────────────────────
     def init_ui(self):
         self.setObjectName("root")
-        self.setWindowTitle("KatoyOS Pinoy Videoke Player")
+        self.setWindowTitle("KaraOkePi Pinoy Videoke Player")
         self.setWindowIcon(QIcon.fromTheme("katoyos"))
         if self.kiosk:
             self.setCursor(Qt.CursorShape.BlankCursor)
@@ -2300,7 +2335,7 @@ class KaraokeApp(QWidget):
         brand_row = QHBoxLayout()
         badge = QLabel()
         badge.setPixmap(badge_pixmap("mic", S(64)))
-        brand = QLabel("KATOYOS")
+        brand = QLabel("KARAOKEPI")
         brand.setFont(ui_font(22, QFont.Weight.ExtraBold, spacing=S(8)))
         brand.setStyleSheet("color: #ff8cc4;")
         brand_row.addWidget(badge)
@@ -2975,7 +3010,8 @@ class KaraokeApp(QWidget):
         if not self.db:
             return
         query = self.search_input.text().strip()
-        rows = self.db.search(query)
+        res = self.db.search(query, offset=0, limit=1000)
+        rows = res["songs"] if isinstance(res, dict) else res
 
         self.table.setRowCount(len(rows))
         for row_idx, (code, title, artist, filepath) in enumerate(rows):
@@ -3385,7 +3421,7 @@ class KaraokeApp(QWidget):
 def main():
     config = load_config()
     app = QApplication(sys.argv)
-    app.setApplicationName("KatoyOS Pinoy Videoke Player")
+    app.setApplicationName("KaraOkePi Pinoy Videoke Player")
     apply_theme(app)
 
     player = KaraokeApp(config)

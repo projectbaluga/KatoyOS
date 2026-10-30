@@ -53,7 +53,8 @@ class SongIndexerWorker(QThread):
         self.force = force
 
     def run(self):
-        db_path = (self.usb_dir / ".katoy-karaoke.db") if self.usb_dir.is_dir() else (self.usb_dir.parent / ".katoy-karaoke.db")
+        first_dir = self.usb_dir[0] if isinstance(self.usb_dir, (list, tuple)) else self.usb_dir
+        db_path = (first_dir / ".katoy-karaoke.db") if first_dir.is_dir() else (first_dir.parent / ".katoy-karaoke.db")
         db_instance = None
         count = 0
         read_only_msg = ""
@@ -76,7 +77,7 @@ class SongIndexerWorker(QThread):
             fallback_dir = Path("/tmp/katoy_karaoke")
             try:
                 fallback_dir.mkdir(parents=True, exist_ok=True)
-                safe_name = re.sub(r'[^a-zA-Z0-9_-]', '_', self.usb_dir.name)
+                safe_name = re.sub(r'[^a-zA-Z0-9_-]', '_', first_dir.name)
                 fallback_db_path = fallback_dir / f".katoy-karaoke-{safe_name}.db"
                 db_instance = SongDatabase(fallback_db_path)
                 count = db_instance.index_songs(self.usb_dir, force=self.force, progress_callback=prog_cb)
@@ -84,8 +85,9 @@ class SongIndexerWorker(QThread):
             except Exception as e:
                 print(f"Fallback indexing failed: {e}")
 
-        sf = find_soundfont(self.config.get("SOUNDFONT"), self.usb_dir)
-        bgs = find_backgrounds(self.config.get("BACKGROUND"), self.usb_dir)
+        usb_ref = first_dir
+        sf = find_soundfont(self.config.get("SOUNDFONT"), usb_ref)
+        bgs = find_backgrounds(self.config.get("BACKGROUND"), usb_ref)
 
         self.finished.emit(count, sf, bgs, read_only_msg)
 
@@ -1289,26 +1291,35 @@ class SongDatabase:
             self.conn.execute("CREATE INDEX IF NOT EXISTS idx_artist ON songs(artist)")
 
     def index_songs(self, songs_dir, force=False, progress_callback=None):
-        songs_dir = Path(songs_dir)
-        if not songs_dir.exists():
+        if isinstance(songs_dir, (list, tuple)):
+            dirs = [Path(d) for d in songs_dir if Path(d).exists()]
+        else:
+            p = Path(songs_dir)
+            dirs = [p] if p.exists() else []
+
+        if not dirs:
             return 0
 
         audio_files = []
+        seen_paths = set()
         total_disk_size = 0
         latest_on_disk_mtime = 0.0
 
-        for root, _, files in os.walk(songs_dir):
-            for f in files:
-                if f.lower().endswith((".mid", ".kar")):
-                    fp = Path(root) / f
-                    audio_files.append(fp)
-                    try:
-                        st = fp.stat()
-                        total_disk_size += st.st_size
-                        if st.st_mtime > latest_on_disk_mtime:
-                            latest_on_disk_mtime = st.st_mtime
-                    except Exception:
-                        pass
+        for d in dirs:
+            for root, _, files in os.walk(d):
+                for f in files:
+                    if f.lower().endswith((".mid", ".kar")):
+                        fp = Path(root) / f
+                        if fp not in seen_paths:
+                            seen_paths.add(fp)
+                            audio_files.append(fp)
+                            try:
+                                st = fp.stat()
+                                total_disk_size += st.st_size
+                                if st.st_mtime > latest_on_disk_mtime:
+                                    latest_on_disk_mtime = st.st_mtime
+                            except Exception:
+                                pass
 
         audio_files.sort()
 
@@ -2878,14 +2889,24 @@ class KaraokeApp(QWidget):
 
     def check_usb_and_media(self):
         conf_dir = self.config.get("SONGS_DIR", "auto")
+        builtin_dir = Path("/usr/share/katoy/songs")
+        builtin_exists = builtin_dir.exists() and any(builtin_dir.iterdir()) if builtin_dir.exists() else False
 
+        target_dirs = []
         if conf_dir == "auto":
             usb_dir = detect_usb_songs_dir()
+            if usb_dir:
+                target_dirs.append(usb_dir)
+            if builtin_exists:
+                target_dirs.append(builtin_dir)
         else:
             p = Path(conf_dir)
-            usb_dir = p if p.exists() else None
+            if p.exists():
+                target_dirs.append(p)
+            if builtin_exists and builtin_dir not in target_dirs:
+                target_dirs.append(builtin_dir)
 
-        if not usb_dir:
+        if not target_dirs:
             if self.songs_dir is not None:
                 self.stop_playback()
                 self.songs_dir = None
@@ -2897,8 +2918,10 @@ class KaraokeApp(QWidget):
             self.stack.setCurrentWidget(self.no_usb_page)
             return
 
-        if self.songs_dir != usb_dir:
-            self.songs_dir = usb_dir
+        songs_dir_val = target_dirs[0] if len(target_dirs) == 1 else target_dirs
+
+        if self.songs_dir != songs_dir_val:
+            self.songs_dir = songs_dir_val
             if self.db:
                 self.db.close()
                 self.db = None
@@ -2924,9 +2947,10 @@ class KaraokeApp(QWidget):
 
     def on_indexing_finished(self, count, soundfont, backgrounds, read_only_msg):
         self.index_progress_bar.hide()
-        db_path = (self.songs_dir / ".katoy-karaoke.db") if self.songs_dir.is_dir() else (self.songs_dir.parent / ".katoy-karaoke.db")
+        first_dir = self.songs_dir[0] if isinstance(self.songs_dir, (list, tuple)) else self.songs_dir
+        db_path = (first_dir / ".katoy-karaoke.db") if first_dir.is_dir() else (first_dir.parent / ".katoy-karaoke.db")
         if read_only_msg:
-            safe_name = re.sub(r'[^a-zA-Z0-9_-]', '_', self.songs_dir.name)
+            safe_name = re.sub(r'[^a-zA-Z0-9_-]', '_', first_dir.name)
             db_path = Path("/tmp/katoy_karaoke") / f".katoy-karaoke-{safe_name}.db"
 
         try:
@@ -2940,7 +2964,8 @@ class KaraokeApp(QWidget):
 
         self.song_count = count
         self.count_lbl.setText(f"{count:,} songs")
-        self.status_lbl.setText(f"Loaded from {self.songs_dir.name}{read_only_msg}")
+        dir_name = first_dir.name if not isinstance(self.songs_dir, (list, tuple)) else f"{len(self.songs_dir)} sources"
+        self.status_lbl.setText(f"Loaded from {dir_name}{read_only_msg}")
         self.filter_library()
 
         if self.stack.currentWidget() == self.no_usb_page:

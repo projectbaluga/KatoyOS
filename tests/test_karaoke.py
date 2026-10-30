@@ -125,6 +125,39 @@ def test_stable_code_assignment_and_index_change():
         shutil.rmtree(tmpdir)
 
 
+def test_indexing_multiple_directories():
+    tmpdir = Path(tempfile.mkdtemp())
+    try:
+        d1 = tmpdir / "usb"
+        d2 = tmpdir / "builtin"
+        d1.mkdir()
+        d2.mkdir()
+
+        mid = mido.MidiFile(type=1)
+        track = mido.MidiTrack()
+        mid.tracks.append(track)
+
+        f1 = d1 / "SongUSB.mid"
+        f2 = d2 / "SongSD.mid"
+        mid.save(f1)
+        mid.save(f2)
+
+        db_path = tmpdir / "test_multi.db"
+        db = kk["SongDatabase"](db_path)
+        count = db.index_songs([d1, d2])
+        assert count == 2
+
+        res = db.search("")
+        assert len(res) == 2
+        titles = [r[1] for r in res]
+        assert "SongUSB" in titles
+        assert "SongSD" in titles
+
+        db.close()
+    finally:
+        shutil.rmtree(tmpdir)
+
+
 def test_calculate_elapsed_seconds():
     calc_fn = kk["calculate_elapsed_seconds"]
 

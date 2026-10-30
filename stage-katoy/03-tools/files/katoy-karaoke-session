@@ -17,6 +17,16 @@ trap cleanup SIGTERM SIGINT EXIT
 /usr/bin/X :0 vt1 -nocursor -nolisten tcp -noreset -quiet &
 X_PID=$!
 
+# Wait for the X11 display socket to become ready before launching client
+timeout=100
+while [ ! -S /tmp/.X11-unix/X0 ] && [ $timeout -gt 0 ]; do
+	if ! kill -0 "$X_PID" 2>/dev/null; then
+		break
+	fi
+	sleep 0.1
+	timeout=$((timeout - 1))
+done
+
 /usr/bin/katoy-karaoke-launcher &
 LAUNCHER_PID=$!
 

@@ -22,6 +22,16 @@ sed -i 's/mke2fs -q -t ext4/mke2fs -q -i 8192 -t ext4/g' pi-gen/export-image/pre
 sed -i 's/200 \* 1024 \* 1024/1024 \* 1024 \* 1024/g' pi-gen/export-image/prerun.sh
 sed -i 's/\$ROOT_SIZE \* 0.2/\$ROOT_SIZE \* 0.5/g' pi-gen/export-image/prerun.sh
 
+# Patch pi-gen export-image/prerun.sh to add third FAT32 partition labeled KATOYDATA
+if ! grep -q "DATA_SIZE" pi-gen/export-image/prerun.sh; then
+	sed -i '/ROOT_MARGIN=/a DATA_SIZE="$((1024 * 1024 * 1024))"' pi-gen/export-image/prerun.sh
+	sed -i '/ROOT_PART_SIZE=/a DATA_PART_START=$((ROOT_PART_START + ROOT_PART_SIZE))\nDATA_PART_SIZE=$(((DATA_SIZE + ALIGN - 1) / ALIGN * ALIGN))' pi-gen/export-image/prerun.sh
+	sed -i 's/IMG_SIZE=$((BOOT_PART_START + BOOT_PART_SIZE + ROOT_PART_SIZE))/IMG_SIZE=$((BOOT_PART_START + BOOT_PART_SIZE + ROOT_PART_SIZE + DATA_PART_SIZE))/g' pi-gen/export-image/prerun.sh
+	sed -i '/mkpart primary ext4/a parted --script "${IMG_FILE}" unit B mkpart primary fat32 "${DATA_PART_START}" "$((DATA_PART_START + DATA_PART_SIZE - 1))"' pi-gen/export-image/prerun.sh
+	sed -i '/ROOT_DEV=/a DATA_DEV="${LOOP_DEV}p3"' pi-gen/export-image/prerun.sh
+	sed -i '/mkdosfs -n bootfs/a mkdosfs -n KATOYDATA -F 32 -s 1 -v "$DATA_DEV" > /dev/null\nDATA_STAGING="${STAGE_WORK_DIR}/data-staging"\nmkdir -p "${DATA_STAGING}/songs" "${DATA_STAGING}/soundfonts" "${DATA_STAGING}/backgrounds"\ncat > "${DATA_STAGING}/README.txt" << "DATADOC"\nKatoyOS KaraOkePi Data Drive (KATOYDATA)\n\nYou can copy songs (.mid / .kar), soundfonts (.sf2), and background wallpapers\ndirectly onto this partition from Windows, Mac, or Linux.\n\nFoldering suggestions:\n  - /songs/        : Put MIDI / KAR karaoke files here\n  - /soundfonts/   : Custom SoundFont (.sf2) files\n  - /backgrounds/  : Custom background images (.png / .jpg)\nDATADOC\nDATA_MOUNT="${STAGE_WORK_DIR}/data-mount"\nmkdir -p "${DATA_MOUNT}"\nmount -v "$DATA_DEV" "${DATA_MOUNT}" -t vfat\ncp -rp "${DATA_STAGING}/"* "${DATA_MOUNT}/"\numount "${DATA_MOUNT}"\nrm -rf "${DATA_STAGING}" "${DATA_MOUNT}"' pi-gen/export-image/prerun.sh
+fi
+
 cd pi-gen
 ./build-docker.sh
 mkdir -p ../out && cp -v deploy/* ../out/

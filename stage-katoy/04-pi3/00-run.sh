@@ -22,6 +22,12 @@ CMD="$R/boot/firmware/cmdline.txt"
 [ -f "$CMD" ] || CMD="$R/boot/cmdline.txt"
 sed -i 's/ *$/ quiet splash plymouth.ignore-serial-consoles loglevel=3 logo.nologo vt.global_cursor_default=0/' "$CMD"
 
+# Mount dedicated FAT32 KATOYDATA partition for songs, SoundFonts, and backgrounds
+install -d -m 0755 "$R/media/katoy/KATOYDATA"
+if [ -f "$R/etc/fstab" ] && ! grep -q "KATOYDATA" "$R/etc/fstab"; then
+	echo "LABEL=KATOYDATA /media/katoy/KATOYDATA vfat defaults,noatime,uid=1000,gid=1000,umask=022,nofail 0 0" >> "$R/etc/fstab"
+fi
+
 # Services a karaoke appliance never uses (shaves boot time and RAM)
 on_chroot << 'CHEOF'
 for u in ModemManager.service triggerhappy.service e2scrub_all.timer; do

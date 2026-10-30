@@ -1,11 +1,13 @@
 #!/bin/bash -e
 R="${ROOTFS_DIR}"
 install -d "$R/usr/bin" "$R/usr/lib/katoyos" "$R/usr/share/applications" "$R/usr/share/polkit-1/actions" "$R/etc/xdg/autostart"
+install -m 755 files/katoy-browser   "$R/usr/bin/katoy-browser"
 install -m 755 files/katoy-welcome   "$R/usr/bin/katoy-welcome"
 install -m 755 files/katoy-powerwatch "$R/usr/bin/katoy-powerwatch"
 install -m 755 files/katoy-update    "$R/usr/bin/katoy-update"
 install -m 755 files/katoy-helper    "$R/usr/lib/katoyos/helper"
 install -m 644 files/os.katoy.helper.policy "$R/usr/share/polkit-1/actions/os.katoy.helper.policy"
+install -m 644 files/katoy-browser.desktop "$R/usr/share/applications/katoy-browser.desktop"
 install -m 644 files/katoy-welcome.desktop  "$R/usr/share/applications/katoy-welcome.desktop"
 install -m 644 files/katoy-update.desktop   "$R/usr/share/applications/katoy-update.desktop"
 install -m 644 files/katoy-welcome-autostart.desktop "$R/etc/xdg/autostart/katoy-welcome.desktop"

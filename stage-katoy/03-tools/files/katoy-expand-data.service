@@ -1,0 +1,15 @@
+[Unit]
+Description=Expand KATOYDATA FAT32 Partition on First Boot
+DefaultDependencies=no
+After=local-fs.target
+Before=katoy-karaoke.service
+ConditionPathExists=!/var/lib/katoyos/katoy-data-expanded
+ConditionPathExists=/dev/mmcblk0p3
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/katoy-expand-data
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

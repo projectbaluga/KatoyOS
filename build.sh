@@ -32,6 +32,10 @@ if ! grep -q "DATA_SIZE" pi-gen/export-image/prerun.sh; then
 	sed -i '/mkdosfs -n bootfs/a mkdosfs -n KATOYDATA -F 32 -s 1 -v "$DATA_DEV" > /dev/null\nDATA_STAGING="${STAGE_WORK_DIR}/data-staging"\nmkdir -p "${DATA_STAGING}/songs" "${DATA_STAGING}/soundfonts" "${DATA_STAGING}/backgrounds"\ncat > "${DATA_STAGING}/README.txt" << "DATADOC"\nKatoyOS KaraOkePi Data Drive (KATOYDATA)\n\nYou can copy songs (.mid / .kar), soundfonts (.sf2), and background wallpapers\ndirectly onto this partition from Windows, Mac, or Linux.\n\nFoldering suggestions:\n  - /songs/        : Put MIDI / KAR karaoke files here\n  - /soundfonts/   : Custom SoundFont (.sf2) files\n  - /backgrounds/  : Custom background images (.png / .jpg)\nDATADOC\nDATA_MOUNT="${STAGE_WORK_DIR}/data-mount"\nmkdir -p "${DATA_MOUNT}"\nmount -v "$DATA_DEV" "${DATA_MOUNT}" -t vfat\ncp -rp "${DATA_STAGING}/"* "${DATA_MOUNT}/"\numount "${DATA_MOUNT}"\nrm -rf "${DATA_STAGING}" "${DATA_MOUNT}"' pi-gen/export-image/prerun.sh
 fi
 
+# Hardening assertions: ensure patches applied cleanly against pi-gen export-image/prerun.sh
+grep -q 'mkpart primary fat32' pi-gen/export-image/prerun.sh || { echo "KATOYDATA partition patch failed"; exit 1; }
+grep -q 'mkdosfs -n KATOYDATA' pi-gen/export-image/prerun.sh || { echo "KATOYDATA label patch failed"; exit 1; }
+
 cd pi-gen
 ./build-docker.sh
 mkdir -p ../out && cp -v deploy/* ../out/

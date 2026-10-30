@@ -101,13 +101,26 @@ def test_api_search_clamping_and_validation():
         shutil.rmtree(tmp)
 
 
-def test_katoydata_fstab_configuration():
+def test_katoydata_fstab_and_expand_service_configuration():
     script_04 = SCRIPT_PATH.parent.parent.parent / "04-pi3" / "00-run.sh"
-    content = script_04.read_text(encoding="utf-8")
-    assert "/media/katoy/KATOYDATA" in content
-    assert "LABEL=KATOYDATA" in content
-    assert "vfat" in content
-    assert "nofail" in content
+    content_04 = script_04.read_text(encoding="utf-8")
+    assert "/media/katoy/KATOYDATA" in content_04
+    assert "LABEL=KATOYDATA" in content_04
+    assert "vfat" in content_04
+    assert "nofail" in content_04
+    assert "init_resize.sh" in content_04
+
+    expand_svc = SCRIPT_PATH.parent / "katoy-expand-data.service"
+    assert expand_svc.exists()
+    svc_text = expand_svc.read_text(encoding="utf-8")
+    assert "ExecStart=/usr/bin/katoy-expand-data" in svc_text
+    assert "Before=katoy-karaoke.service" in svc_text
+
+    expand_script = SCRIPT_PATH.parent / "katoy-expand-data"
+    assert expand_script.exists()
+    script_text = expand_script.read_text(encoding="utf-8")
+    assert "fatresize" in script_text
+    assert "parted" in script_text
 
 
 def test_service_unit_has_no_ordering_cycle_and_a_login_session():

@@ -20,7 +20,17 @@ CF
 # Quiet boot with the Plymouth splash
 CMD="$R/boot/firmware/cmdline.txt"
 [ -f "$CMD" ] || CMD="$R/boot/cmdline.txt"
+# Strip any stock pi-gen first-boot init_resize.sh kernel argument to prevent p2 rootfs expansion from corrupting p3 KATOYDATA
+sed -i -E 's/init=\/usr\/(lib|libexec)\/raspi-config\/init_resize\.sh//g' "$CMD"
 sed -i 's/ *$/ quiet splash plymouth.ignore-serial-consoles loglevel=3 logo.nologo vt.global_cursor_default=0/' "$CMD"
+
+# Disable stock rootfs resize services (resizing p2 rootfs would overlap/corrupt p3 KATOYDATA partition)
+on_chroot << 'CHEOF'
+for u in resize2fs_once.service raspi-config.service; do
+	systemctl disable "$u" >/dev/null 2>&1 || true
+	systemctl mask "$u" >/dev/null 2>&1 || true
+done
+CHEOF
 
 # Mount dedicated FAT32 KATOYDATA partition for songs, SoundFonts, and backgrounds
 install -d -m 0755 "$R/media/katoy/KATOYDATA"

@@ -35,3 +35,6 @@ python3-pyqt6
 python3-qrcode
 x11-xkb-utils
 xkb-data
+# disk partitioning and FAT32 expansion
+parted
+fatresize

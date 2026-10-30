@@ -1,0 +1,52 @@
+#!/bin/bash
+# First-boot oneshot script to expand KATOYDATA FAT32 partition to fill the remaining SD card space.
+set -e
+
+MARKER_DIR="/var/lib/katoyos"
+MARKER_FILE="${MARKER_DIR}/katoy-data-expanded"
+
+if [ -f "$MARKER_FILE" ]; then
+    echo "KATOYDATA partition already expanded; skipping."
+    exit 0
+fi
+
+mkdir -p "$MARKER_DIR"
+
+# Identify partition 3 or partition with label KATOYDATA on MMC/SD device
+DEV="/dev/mmcblk0"
+PART="${DEV}p3"
+
+if [ ! -b "$PART" ]; then
+    echo "Partition $PART not found; skipping expansion."
+    touch "$MARKER_FILE"
+    exit 0
+fi
+
+echo "Expanding $PART to fill remaining disk space..."
+
+# Unmount if currently mounted to allow clean partition and filesystem resize
+umount "$PART" 2>/dev/null || true
+umount /media/katoy/KATOYDATA 2>/dev/null || true
+
+# Expand partition 3 to 100% of disk space
+if command -v parted >/dev/null 2>&1; then
+    parted -s "$DEV" resizepart 3 100% || true
+elif command -v growpart >/dev/null 2>&1; then
+    growpart "$DEV" 3 || true
+fi
+
+# Inform kernel of partition table changes
+udevadm settle 2>/dev/null || true
+blockdev --rereadpt "$DEV" 2>/dev/null || true
+
+# Grow FAT32 filesystem
+if command -v fatresize >/dev/null 2>&1; then
+    fatresize -s max "$PART" || true
+fi
+
+# Remount filesystems
+mount -a 2>/dev/null || true
+
+touch "$MARKER_FILE"
+echo "KATOYDATA partition expansion finished successfully."
+exit 0

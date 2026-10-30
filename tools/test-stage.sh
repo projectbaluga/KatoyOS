@@ -136,6 +136,12 @@ grep -q "^KIOSK=1" "$WORK_DIR/etc/katoyos/karaoke.conf" || { echo "FAIL: karaoke
 # 5. Assert installed tools and files exist with correct modes
 [ -d "$WORK_DIR/media/katoy/KATOYDATA" ] || { echo "FAIL: KATOYDATA mountpoint missing"; exit 1; }
 grep -q "LABEL=KATOYDATA /media/katoy/KATOYDATA vfat" "$WORK_DIR/etc/fstab" || { echo "FAIL: KATOYDATA fstab entry missing"; exit 1; }
+! grep -q "init_resize.sh" "$CMD" || { echo "FAIL: init_resize.sh was not stripped from cmdline.txt"; exit 1; }
+[ -x "$WORK_DIR/usr/bin/katoy-expand-data" ] || { echo "FAIL: katoy-expand-data missing or not executable"; exit 1; }
+[ -f "$WORK_DIR/etc/systemd/system/katoy-expand-data.service" ] || { echo "FAIL: katoy-expand-data.service missing"; exit 1; }
+[ -L "$WORK_DIR/etc/systemd/system/multi-user.target.wants/katoy-expand-data.service" ] || { echo "FAIL: katoy-expand-data.service not enabled"; exit 1; }
+grep -q "^parted" "$REPO_ROOT/stage-katoy/00-packages/00-packages-nr" || { echo "FAIL: parted missing from package list"; exit 1; }
+grep -q "^fatresize" "$REPO_ROOT/stage-katoy/00-packages/00-packages-nr" || { echo "FAIL: fatresize missing from package list"; exit 1; }
 [ -x "$WORK_DIR/usr/bin/katoy-welcome" ] || { echo "FAIL: katoy-welcome missing or not executable"; exit 1; }
 [ -x "$WORK_DIR/usr/bin/katoy-karaoke" ] || { echo "FAIL: katoy-karaoke missing or not executable"; exit 1; }
 [ -x "$WORK_DIR/usr/lib/katoyos/helper" ] || { echo "FAIL: katoy-helper missing or not executable"; exit 1; }

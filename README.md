@@ -54,7 +54,7 @@ KatoyOS delivers a responsive, zero-configuration out-of-the-box desktop experie
 - **Hardware Watchdog (`katoy-powerwatch`):** Actively monitors hardware status registers (`/sys/devices/platform/soc/soc:firmware/get_throttled`) to issue desktop notifications upon detecting power supply drops (under-voltage) or soft thermal throttling.
 - **SD-Card Resilience:** System logs configured to RAM-only (`Storage=volatile` with `32M` ceiling in `journald`), combined with zram compressed swap (`rpi-swap`), significantly reduces physical flash wear.
 - **Seamless Updates (`katoy-update`):** Includes a one-click graphical terminal updater for performing system and package updates on demand.
-- **Standalone Karaoke System (KaraOkePi / `katoy-karaoke`):** Dedicated fullscreen MIDI/KAR player application powered by FluidSynth and PipeWire audio synthesis. Includes a dedicated FAT32 `KATOYDATA` partition on the SD card—plug the SD card into any Windows, Mac, or Linux computer to copy songs, SoundFonts, and background graphics directly onto it, alongside USB drive auto-detection and fast local SQLite song indexing.
+- **Standalone Karaoke System (KaraOkePi / `katoy-karaoke`):** Dedicated fullscreen MIDI/KAR player application powered by FluidSynth and PipeWire audio synthesis. Includes a dedicated FAT32 `KATOYDATA` partition on the SD card that automatically expands on first boot to fill all remaining SD card space (while rootfs remains at image size). Users can plug the SD card into any Windows, Mac, or Linux computer to copy songs, SoundFonts, and background graphics directly onto it.
 
 ---
 

@@ -1,5 +1,5 @@
 [Unit]
-Description=KatoyOS Karaoke appliance (boots straight into the player)
+Description=KaraOkePi karaoke appliance (boots straight into the player)
 # Same ordering getty@tty1 uses, so we take over tty1 right after the boot splash.
 # NOTE: deliberately NOT ordered after graphical.target - we are WantedBy multi-user.target,
 # so that would be an ordering cycle and systemd would silently drop the job.
@@ -24,7 +24,7 @@ StandardOutput=journal
 StandardError=journal
 UtmpIdentifier=tty1
 UtmpMode=user
-ExecStart=/usr/bin/xinit /usr/bin/katoy-karaoke-launcher -- /usr/bin/X :0 vt1 -nocursor -nolisten tcp -noreset -quiet
+ExecStart=/usr/bin/katoy-karaoke-session
 Restart=always
 RestartSec=2
 TimeoutStopSec=10

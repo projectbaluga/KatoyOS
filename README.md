@@ -29,15 +29,15 @@
 
 *First-boot 5-page setup wizard (`katoy-welcome`): Built in PyQt6 for easy timezone selection, Wi-Fi country code regulation, keyboard layout matching, and user account password management.*
 
-### 🎤 KatoyOS Karaoke Player UI
+### 🎤 KaraOkePi Player UI
 <p align="center">
-  <img src="assets/katoyos-karaoke-preview.png" alt="KatoyOS Karaoke Player Preview" width="750"/>
+  <img src="assets/katoyos-karaoke-preview.png" alt="KaraOkePi Player Preview" width="750"/>
 </p>
 
 *The "Neon Videoke" player UI (`katoy-karaoke`): karaoke-style word-by-word lyric wipe with outlined text, glass cards, gradient song selection, a numbered reservation queue, auto-hiding controls so the lyric screen stays clean, and an animated end-of-song score card. Everything is drawn with QPainter/QSS (no emoji font, OpenGL or blur effects needed), and scales from 720p to 1080p+.*
 
 <p align="center">
-  <img src="assets/katoyos-karaoke-library-preview.png" alt="KatoyOS Karaoke Song Library" width="750"/>
+  <img src="assets/katoyos-karaoke-library-preview.png" alt="KaraOkePi Song Library" width="750"/>
 </p>
 
 ---
@@ -54,7 +54,7 @@ KatoyOS delivers a responsive, zero-configuration out-of-the-box desktop experie
 - **Hardware Watchdog (`katoy-powerwatch`):** Actively monitors hardware status registers (`/sys/devices/platform/soc/soc:firmware/get_throttled`) to issue desktop notifications upon detecting power supply drops (under-voltage) or soft thermal throttling.
 - **SD-Card Resilience:** System logs configured to RAM-only (`Storage=volatile` with `32M` ceiling in `journald`), combined with zram compressed swap (`rpi-swap`), significantly reduces physical flash wear.
 - **Seamless Updates (`katoy-update` & Unattended Security Updates):** Includes a one-click graphical terminal updater alongside `unattended-upgrades` pre-configured for automated security patches.
-- **Standalone Karaoke System (`katoy-karaoke`):** Dedicated fullscreen MIDI/KAR player application powered by FluidSynth and PipeWire audio synthesis. Keeps SD-card rootfs footprint minimal by reading song files, SoundFonts, and background media directly from removable USB drives with fast local SQLite song indexing.
+- **Standalone Karaoke System (KaraOkePi / `katoy-karaoke`):** Dedicated fullscreen MIDI/KAR player application powered by FluidSynth and PipeWire audio synthesis. Keeps SD-card rootfs footprint minimal by reading song files, SoundFonts, and background media directly from removable USB drives with fast local SQLite song indexing.
 
 ---
 

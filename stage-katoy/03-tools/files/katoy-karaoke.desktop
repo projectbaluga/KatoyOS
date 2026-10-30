@@ -1,6 +1,6 @@
 [Desktop Entry]
 Type=Application
-Name=KatoyOS Karaoke
+Name=KaraOkePi Karaoke
 Comment=Play MIDI/KAR karaoke songs from a USB drive
 Exec=katoy-karaoke
 Icon=katoyos

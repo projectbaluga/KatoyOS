@@ -6,6 +6,7 @@ install -m 755 files/katoy-powerwatch "$R/usr/bin/katoy-powerwatch"
 install -m 755 files/katoy-update    "$R/usr/bin/katoy-update"
 install -m 755 files/katoy-karaoke   "$R/usr/bin/katoy-karaoke"
 install -m 755 files/katoy-karaoke-launcher "$R/usr/bin/katoy-karaoke-launcher"
+install -m 755 files/katoy-karaoke-session  "$R/usr/bin/katoy-karaoke-session"
 install -m 755 files/katoy-helper    "$R/usr/lib/katoyos/helper"
 install -m 644 files/os.katoy.helper.policy "$R/usr/share/polkit-1/actions/os.katoy.helper.policy"
 install -m 644 files/10-udisks2-katoy.rules  "$R/etc/polkit-1/rules.d/10-udisks2-katoy.rules"
@@ -16,6 +17,11 @@ install -m 644 files/katoy-karaoke.desktop  "$R/usr/share/applications/katoy-kar
 install -m 644 files/katoy-karaoke.conf     "$R/etc/katoyos/karaoke.conf"
 install -m 644 files/katoy-karaoke.service  "$R/etc/systemd/system/katoy-karaoke.service"
 install -m 644 files/katoy-powerwatch.desktop "$R/etc/xdg/autostart/katoy-powerwatch.desktop"
+
+if [ -d files/songs ] && [ "$(ls files/songs 2>/dev/null)" ]; then
+	install -d "$R/usr/share/katoy/songs"
+	cp -a files/songs/* "$R/usr/share/katoy/songs/"
+fi
 
 install -d "$R/etc/X11"
 install -m 644 files/Xwrapper.config "$R/etc/X11/Xwrapper.config"

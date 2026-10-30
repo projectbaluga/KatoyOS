@@ -35,7 +35,8 @@ def test_database_is_usable_from_other_threads():
     th.start()
     th.join()
     assert "err" not in result, result.get("err")
-    assert result["rows"][0][0] == "00042"
+    rows = result["rows"]["songs"] if isinstance(result["rows"], dict) else result["rows"]
+    assert rows[0][0] == "00042"
     assert result["one"][1] == "Harana"
 
 

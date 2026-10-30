@@ -101,6 +101,15 @@ def test_api_search_clamping_and_validation():
         shutil.rmtree(tmp)
 
 
+def test_katoydata_fstab_configuration():
+    script_04 = SCRIPT_PATH.parent.parent.parent / "04-pi3" / "00-run.sh"
+    content = script_04.read_text(encoding="utf-8")
+    assert "/media/katoy/KATOYDATA" in content
+    assert "LABEL=KATOYDATA" in content
+    assert "vfat" in content
+    assert "nofail" in content
+
+
 def test_service_unit_has_no_ordering_cycle_and_a_login_session():
     unit = (SCRIPT_PATH.parent / "katoy-karaoke.service").read_text()
     assert "WantedBy=multi-user.target" in unit

@@ -10,6 +10,7 @@ trap 'rm -rf "$WORK_DIR"' EXIT
 
 echo "=== Setting up fake rootfs in $WORK_DIR ==="
 mkdir -p "$WORK_DIR/etc" "$WORK_DIR/boot/firmware"
+touch "$WORK_DIR/etc/fstab"
 
 cat > "$WORK_DIR/etc/os-release" <<'EOF'
 PRETTY_NAME="Debian GNU/Linux trixie/sid"
@@ -133,6 +134,8 @@ fi
 grep -q "^KIOSK=1" "$WORK_DIR/etc/katoyos/karaoke.conf" || { echo "FAIL: karaoke.conf KIOSK is not 1"; exit 1; }
 
 # 5. Assert installed tools and files exist with correct modes
+[ -d "$WORK_DIR/media/katoy/KATOYDATA" ] || { echo "FAIL: KATOYDATA mountpoint missing"; exit 1; }
+grep -q "LABEL=KATOYDATA /media/katoy/KATOYDATA vfat" "$WORK_DIR/etc/fstab" || { echo "FAIL: KATOYDATA fstab entry missing"; exit 1; }
 [ -x "$WORK_DIR/usr/bin/katoy-welcome" ] || { echo "FAIL: katoy-welcome missing or not executable"; exit 1; }
 [ -x "$WORK_DIR/usr/bin/katoy-karaoke" ] || { echo "FAIL: katoy-karaoke missing or not executable"; exit 1; }
 [ -x "$WORK_DIR/usr/lib/katoyos/helper" ] || { echo "FAIL: katoy-helper missing or not executable"; exit 1; }

@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Katoy Browser
+Comment=Browse the web with KatoyOS
+Exec=/usr/bin/katoy-browser
+Icon=web-browser
+Terminal=false
+Categories=Network;WebBrowser;
+StartupNotify=true

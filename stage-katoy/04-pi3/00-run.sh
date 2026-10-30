@@ -94,5 +94,12 @@ CHEOF
 fi
 
 on_chroot << 'CHEOF'
+apt-get purge -y unattended-upgrades || true
+systemctl mask apt-daily.service apt-daily-upgrade.service >/dev/null 2>&1 || true
+systemctl disable apt-daily.timer apt-daily-upgrade.timer >/dev/null 2>&1 || true
+mkdir -p /etc/apt/apt.conf.d
+cat > /etc/apt/apt.conf.d/20auto-upgrades <<'EOF'
+APT::Periodic::Unattended-Upgrade "0";
+EOF
 apt-get clean
 CHEOF

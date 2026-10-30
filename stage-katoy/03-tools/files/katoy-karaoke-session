@@ -1,0 +1,28 @@
+#!/bin/bash
+# Supervisor script for KatoyOS Karaoke appliance session on display :0.
+# Replaces xinit to eliminate hung xinit processes when children die.
+
+cleanup() {
+	trap - SIGTERM SIGINT EXIT
+	if [ -n "$X_PID" ] && kill -0 "$X_PID" 2>/dev/null; then
+		kill -TERM "$X_PID" 2>/dev/null || true
+	fi
+	if [ -n "$LAUNCHER_PID" ] && kill -0 "$LAUNCHER_PID" 2>/dev/null; then
+		kill -TERM "$LAUNCHER_PID" 2>/dev/null || true
+	fi
+}
+
+trap cleanup SIGTERM SIGINT EXIT
+
+/usr/bin/X :0 vt1 -nocursor -nolisten tcp -noreset -quiet &
+X_PID=$!
+
+/usr/bin/katoy-karaoke-launcher &
+LAUNCHER_PID=$!
+
+# Wait for any child process to exit
+wait -n "$X_PID" "$LAUNCHER_PID" 2>/dev/null || true
+
+# When either child exits, clean up and exit non-zero so systemd triggers Restart=always
+cleanup
+exit 1

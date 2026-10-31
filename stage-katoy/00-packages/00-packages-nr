@@ -4,6 +4,7 @@ xserver-xorg-input-libinput
 xinit
 xserver-xorg-legacy
 x11-xserver-utils
+x11-utils
 libxcb-cursor0
 fonts-dejavu-core
 openbox

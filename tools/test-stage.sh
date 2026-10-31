@@ -128,9 +128,20 @@ grep -q "^PAMName=login" "$SVC" || { echo "FAIL: service has no PAM session (no 
 if grep -E "^After=.*graphical\.target" "$SVC"; then
     echo "FAIL: service ordered After=graphical.target while WantedBy=multi-user.target (ordering cycle)"; exit 1
 fi
+grep -q "^ExecStart=/usr/bin/xinit" "$SVC" || { echo "FAIL: service ExecStart does not use xinit"; exit 1; }
 [ -f "$WORK_DIR/var/lib/systemd/linger/katoy" ] || { echo "FAIL: linger not enabled for katoy"; exit 1; }
 [ -x "$WORK_DIR/usr/bin/katoy-karaoke-launcher" ] || { echo "FAIL: launcher missing or not executable"; exit 1; }
+grep -q "DISPLAY=" "$WORK_DIR/usr/bin/katoy-karaoke-launcher" || { echo "FAIL: launcher does not export DISPLAY"; exit 1; }
+grep -q "xset q" "$WORK_DIR/usr/bin/katoy-karaoke-launcher" || { echo "FAIL: launcher missing xset q wait loop"; exit 1; }
 [ -f "$WORK_DIR/etc/X11/Xwrapper.config" ] || { echo "FAIL: Xwrapper.config missing"; exit 1; }
+grep -q "^needs_root_rights=yes" "$WORK_DIR/etc/X11/Xwrapper.config" || { echo "FAIL: Xwrapper.config needs_root_rights is not yes"; exit 1; }
+[ -f "$WORK_DIR/var/lib/openbox/debian-menu.xml" ] || { echo "FAIL: debian-menu.xml missing"; exit 1; }
+[ -f "$WORK_DIR/etc/wpa_supplicant/wpa_supplicant.conf" ] || { echo "FAIL: wpa_supplicant.conf missing"; exit 1; }
+grep -q "country=PH" "$WORK_DIR/etc/wpa_supplicant/wpa_supplicant.conf" || { echo "FAIL: wpa_supplicant.conf missing country=PH"; exit 1; }
+grep -q "^x11-utils" "$REPO_ROOT/stage-katoy/00-packages/00-packages-nr" || { echo "FAIL: x11-utils missing from package list"; exit 1; }
+grep -q "^libxcb-cursor0" "$REPO_ROOT/stage-katoy/00-packages/00-packages-nr" || { echo "FAIL: libxcb-cursor0 missing from package list"; exit 1; }
+grep -q "^xserver-xorg-legacy" "$REPO_ROOT/stage-katoy/00-packages/00-packages-nr" || { echo "FAIL: xserver-xorg-legacy missing from package list"; exit 1; }
+grep -q "^x11-xserver-utils" "$REPO_ROOT/stage-katoy/00-packages/00-packages-nr" || { echo "FAIL: x11-xserver-utils missing from package list"; exit 1; }
 grep -q "^KIOSK=1" "$WORK_DIR/etc/katoyos/karaoke.conf" || { echo "FAIL: karaoke.conf KIOSK is not 1"; exit 1; }
 
 # 5. Assert installed tools and files exist with correct modes

@@ -4,6 +4,15 @@
 
 export QT_QPA_PLATFORM=xcb
 export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
+export DISPLAY="${DISPLAY:-:0}"
+export LIBGL_ALWAYS_SOFTWARE=1
+export QT_QUICK_BACKEND=software
+
+# Wait for X server to accept requests before running xset/xsetroot
+for i in $(seq 1 50); do
+    xset q >/dev/null 2>&1 && break
+    sleep 0.2
+done
 
 # Never blank the screen or let the monitor sleep in the middle of a song.
 if command -v xset >/dev/null 2>&1; then

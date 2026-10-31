@@ -28,6 +28,15 @@ fi
 install -d "$R/etc/X11"
 install -m 644 files/Xwrapper.config "$R/etc/X11/Xwrapper.config"
 
+# Silence Openbox warning: "Unable to find a valid menu file debian-menu.xml"
+install -d "$R/var/lib/openbox"
+cat > "$R/var/lib/openbox/debian-menu.xml" << 'EOF'
+<?xml version="1.0" encoding="UTF-8"?>
+<openbox_menu xmlns="http://openbox.org/">
+</openbox_menu>
+EOF
+chmod 644 "$R/var/lib/openbox/debian-menu.xml"
+
 # ── Appliance (kiosk) boot: power on -> Plymouth splash -> karaoke player. No display manager, no desktop. ──
 # Done with plain symlinks instead of `systemctl enable` so it also works (and is testable) outside a chroot.
 if [ "${KATOY_KIOSK:-1}" = "1" ]; then

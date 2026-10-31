@@ -60,18 +60,46 @@ cat > "$R/etc/systemd/system.conf.d/watchdog.conf" <<WD
 RuntimeWatchdogSec=15s
 WD
 
+# Configure Wi-Fi Regulatory Domain (Country) and Unblock Wi-Fi
+# Must run before OverlayFS is enabled so /boot/firmware and wpa_supplicant configs persist
+on_chroot << 'CHEOF'
+if command -v raspi-config >/dev/null 2>&1; then
+	raspi-config nonint do_wifi_country PH || true
+	raspi-config nonint do_rfkill 0 || true
+fi
+if command -v rfkill >/dev/null 2>&1; then
+	rfkill unblock wifi || true
+fi
+CHEOF
+
+# Fallback: ensure country=PH in wpa_supplicant.conf
+install -d "$R/etc/wpa_supplicant"
+if [ ! -f "$R/etc/wpa_supplicant/wpa_supplicant.conf" ]; then
+	cat > "$R/etc/wpa_supplicant/wpa_supplicant.conf" <<'EOF'
+ctrl_interface=DIR=/var/run/wpa_supplicant GROUP=netdev
+update_config=1
+country=PH
+EOF
+elif ! grep -q "^country=" "$R/etc/wpa_supplicant/wpa_supplicant.conf"; then
+	echo "country=PH" >> "$R/etc/wpa_supplicant/wpa_supplicant.conf"
+fi
+
 # Enable OverlayFS Read-Only Root with RAM Overlay for power-cut resilience
 if [ "${KATOY_OVERLAYFS:-1}" = "1" ]; then
 on_chroot << 'CHEOF'
 if command -v raspi-config >/dev/null 2>&1; then
 	raspi-config nonint do_overlayfs 0 || true
 fi
+# Mask services that fail or produce cascade errors on read-only OverlayFS root
+systemctl mask systemd-remount-fs.service >/dev/null 2>&1 || true
+systemctl mask dphys-swapfile.service >/dev/null 2>&1 || true
 CHEOF
 fi
 
 # Package Slimming Stage: Purge unneeded base image packages with dry-run protection
 if [ "${KATOY_SLIM_IMAGE:-1}" = "1" ]; then
 on_chroot << 'CHEOF'
+export DEBIAN_FRONTEND=noninteractive
 slim_pkgs="build-essential gdb manpages-dev man-db mkvtoolnix v4l-utils rpicam-apps-lite p7zip-full libmtp-runtime lua5.1 luajit"
 purge_list=""
 for p in $slim_pkgs; do
@@ -94,6 +122,7 @@ fi
 # Removal is skipped if apt would also remove anything that is not a kernel package.
 if [ "${KATOY_PRUNE_KERNELS:-1}" = "1" ]; then
 on_chroot << 'CHEOF'
+export DEBIAN_FRONTEND=noninteractive
 pkgs=""
 for p in linux-image-rpi-v6 linux-image-rpi-v7l linux-image-rpi-v8 linux-image-rpi-2712 linux-headers-rpi-v6 linux-headers-rpi-v7l linux-headers-rpi-v8 linux-headers-rpi-2712; do
 	dpkg -s "$p" >/dev/null 2>&1 && pkgs="$pkgs $p"
@@ -110,6 +139,7 @@ CHEOF
 fi
 
 on_chroot << 'CHEOF'
+export DEBIAN_FRONTEND=noninteractive
 apt-get purge -y unattended-upgrades || true
 systemctl mask apt-daily.service apt-daily-upgrade.service >/dev/null 2>&1 || true
 systemctl disable apt-daily.timer apt-daily-upgrade.timer >/dev/null 2>&1 || true

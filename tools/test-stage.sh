@@ -77,11 +77,13 @@ echo "=== Running Assertions ==="
 
 # 1. Assert config.txt ends with [all] block and has single vc4-kms-v3d
 CFG="$WORK_DIR/boot/firmware/config.txt"
-VC4_COUNT=$(grep -c "dtoverlay=vc4-kms-v3d" "$CFG" || true)
+VC4_COUNT=$(grep -cE "^dtoverlay=vc4-f?kms-v3d" "$CFG" || true)
 if [ "$VC4_COUNT" -ne 1 ]; then
-    echo "FAIL: Expected exactly 1 instance of vc4-kms-v3d in config.txt, found $VC4_COUNT"
+    echo "FAIL: Expected exactly 1 vc4-kms/fkms overlay in config.txt, found $VC4_COUNT"
     exit 1
 fi
+
+grep -q "^dtoverlay=vc4-fkms-v3d" "$CFG" || { echo "FAIL: Pi 3 needs vc4-fkms-v3d (full KMS gives a blank screen with the X11 kiosk)"; exit 1; }
 
 if ! sed -n '/^\[all\]/,$p' "$CFG" | grep -q "disable_splash=1"; then
     echo "FAIL: config.txt [all] block does not contain disable_splash=1"

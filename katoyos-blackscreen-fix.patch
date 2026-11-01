@@ -1,0 +1,122 @@
+diff --git a/config b/config
+index 49d790b..baac481 100644
+--- a/config
++++ b/config
+@@ -15,3 +15,5 @@ STAGE_LIST="stage0 stage1 stage2 stage-katoy"
+ KATOY_PRUNE_KERNELS=1               # drop Pi 1/Zero and 64-bit kernels (Pi 3B uses kernel7)
+ 
+ KATOY_KIOSK=1                       # 1 = power on straight into the karaoke player (no desktop)
++KATOY_OVERLAYFS=0                   # 1 = read-only root with RAM overlay (UNVERIFIED on real Pi 3B hardware; logs vanish on reboot)
++KATOY_FKMS=1                       # 1 = vc4-fkms-v3d (needed for the X11 kiosk on Pi 3B); 0 = stock full-KMS vc4-kms-v3d
+diff --git a/stage-katoy/00-packages/00-packages-nr b/stage-katoy/00-packages/00-packages-nr
+index f12dd83..f87bf79 100644
+--- a/stage-katoy/00-packages/00-packages-nr
++++ b/stage-katoy/00-packages/00-packages-nr
+@@ -28,6 +28,10 @@ pipewire-pulse
+ wireplumber
+ pavucontrol-qt
+ timgm6mb-soundfont
++# REQUIRED by katoy-karaoke (top-level `import mido`, libfluidsynth via ctypes).
++# If either is missing the player dies before opening a window => black screen after the splash.
++fluidsynth
++python3-mido
+ pulseaudio-utils
+ alsa-utils
+ # boot splash + Welcome app runtime
+diff --git a/stage-katoy/00-packages/01-run.sh b/stage-katoy/00-packages/01-run.sh
+index 3cc0288..448dd2e 100755
+--- a/stage-katoy/00-packages/01-run.sh
++++ b/stage-katoy/00-packages/01-run.sh
+@@ -2,7 +2,7 @@
+ # Nice-to-have packages: a missing one must not break the whole build.
+ on_chroot << 'CHEOF'
+ export DEBIAN_FRONTEND=noninteractive
+-for p in fonts-inter papirus-icon-theme falkon featherpad lximage-qt fluidsynth python3-mido; do
++for p in fonts-inter papirus-icon-theme falkon featherpad lximage-qt; do
+ 	apt-get install -y --no-install-recommends "$p" || echo "WARNING: optional package $p was not installed"
+ done
+ CHEOF
+diff --git a/stage-katoy/04-pi3/00-run.sh b/stage-katoy/04-pi3/00-run.sh
+index 13dd381..6ca1375 100755
+--- a/stage-katoy/04-pi3/00-run.sh
++++ b/stage-katoy/04-pi3/00-run.sh
+@@ -5,15 +5,18 @@ R="${ROOTFS_DIR}"
+ # (vc4-kms-v3d is already enabled by pi-gen.)
+ CFG="$R/boot/firmware/config.txt"
+ [ -f "$CFG" ] || CFG="$R/boot/config.txt"
++# Pi 3B + Xorg (modesetting) + software rendering shows a blank screen after the splash with full KMS
++# (vc4-kms-v3d). Fake KMS (vc4-fkms-v3d) keeps the firmware in charge of the display and works.
++# Verified on a real Pi 3: switching this one line made the player UI appear.
++if [ "${KATOY_FKMS:-1}" = "1" ]; then
++	sed -i -E 's/^dtoverlay=vc4-kms-v3d/dtoverlay=vc4-fkms-v3d/' "$CFG"
++fi
++
+ cat >> "$CFG" <<CF
+ 
+ [all]
+ # --- KatoyOS ---
+ disable_splash=1
+-hdmi_force_hotplug=1
+-hdmi_drive=2
+-hdmi_group=1
+-hdmi_mode=16
+ disable_overscan=1
+ CF
+ 
+@@ -22,11 +25,14 @@ CMD="$R/boot/firmware/cmdline.txt"
+ [ -f "$CMD" ] || CMD="$R/boot/cmdline.txt"
+ # Strip any stock pi-gen first-boot init_resize.sh kernel argument to prevent p2 rootfs expansion from corrupting p3 KATOYDATA
+ sed -i -E 's/init=\/usr\/(lib|libexec)\/raspi-config\/init_resize\.sh//g' "$CMD"
++# Trixie pi-gen uses a bare `resize` kernel arg + rpi-resize.service instead of init_resize.sh.
++# Strip it too: growing p2 would collide with the KATOYDATA partition (p3) that follows it.
++sed -i -E 's/ resize( |$)/\1/g' "$CMD"
+ sed -i 's/ *$/ quiet splash plymouth.ignore-serial-consoles loglevel=3 logo.nologo vt.global_cursor_default=0/' "$CMD"
+ 
+ # Disable stock rootfs resize services (resizing p2 rootfs would overlap/corrupt p3 KATOYDATA partition)
+ on_chroot << 'CHEOF'
+-for u in resize2fs_once.service raspi-config.service; do
++for u in resize2fs_once.service raspi-config.service rpi-resize.service; do
+ 	systemctl disable "$u" >/dev/null 2>&1 || true
+ 	systemctl mask "$u" >/dev/null 2>&1 || true
+ done
+diff --git a/tools/test-stage.sh b/tools/test-stage.sh
+index 1a7cd60..889f24d 100755
+--- a/tools/test-stage.sh
++++ b/tools/test-stage.sh
+@@ -49,7 +49,7 @@ CONSOLE_UART=1
+ EOF
+ 
+ cat > "$WORK_DIR/boot/firmware/cmdline.txt" <<'EOF'
+-console=serial0,115200 console=tty1 root=ROOTDEV rootfstype=ext4 fsck.repair=yes rootwait
++console=serial0,115200 console=tty1 root=ROOTDEV rootfstype=ext4 fsck.repair=yes rootwait resize
+ EOF
+ 
+ # Define stub on_chroot function and export required variables
+@@ -77,12 +77,14 @@ echo "=== Running Assertions ==="
+ 
+ # 1. Assert config.txt ends with [all] block and has single vc4-kms-v3d
+ CFG="$WORK_DIR/boot/firmware/config.txt"
+-VC4_COUNT=$(grep -c "dtoverlay=vc4-kms-v3d" "$CFG" || true)
++VC4_COUNT=$(grep -cE "^dtoverlay=vc4-f?kms-v3d" "$CFG" || true)
+ if [ "$VC4_COUNT" -ne 1 ]; then
+-    echo "FAIL: Expected exactly 1 instance of vc4-kms-v3d in config.txt, found $VC4_COUNT"
++    echo "FAIL: Expected exactly 1 vc4-kms/fkms overlay in config.txt, found $VC4_COUNT"
+     exit 1
+ fi
+ 
++grep -q "^dtoverlay=vc4-fkms-v3d" "$CFG" || { echo "FAIL: Pi 3 needs vc4-fkms-v3d (full KMS gives a blank screen with the X11 kiosk)"; exit 1; }
++
+ if ! sed -n '/^\[all\]/,$p' "$CFG" | grep -q "disable_splash=1"; then
+     echo "FAIL: config.txt [all] block does not contain disable_splash=1"
+     exit 1
+@@ -147,6 +149,10 @@ grep -q "^KIOSK=1" "$WORK_DIR/etc/katoyos/karaoke.conf" || { echo "FAIL: karaoke
+ # 5. Assert installed tools and files exist with correct modes
+ [ -d "$WORK_DIR/media/katoy/KATOYDATA" ] || { echo "FAIL: KATOYDATA mountpoint missing"; exit 1; }
+ grep -q "LABEL=KATOYDATA /media/katoy/KATOYDATA vfat" "$WORK_DIR/etc/fstab" || { echo "FAIL: KATOYDATA fstab entry missing"; exit 1; }
++! grep -qE '(^| )resize( |$)' "$CMD" || { echo "FAIL: bare 'resize' arg was not stripped from cmdline.txt"; exit 1; }
++! grep -q "hdmi_mode" "$CFG" || { echo "FAIL: legacy hdmi_mode still present in config.txt"; exit 1; }
++grep -q "^fluidsynth" "$REPO_ROOT/stage-katoy/00-packages/00-packages-nr" || { echo "FAIL: fluidsynth must be a required package"; exit 1; }
++grep -q "^python3-mido" "$REPO_ROOT/stage-katoy/00-packages/00-packages-nr" || { echo "FAIL: python3-mido must be a required package (katoy-karaoke imports it at top level)"; exit 1; }
+ ! grep -q "init_resize.sh" "$CMD" || { echo "FAIL: init_resize.sh was not stripped from cmdline.txt"; exit 1; }
+ [ -x "$WORK_DIR/usr/bin/katoy-expand-data" ] || { echo "FAIL: katoy-expand-data missing or not executable"; exit 1; }
+ [ -f "$WORK_DIR/etc/systemd/system/katoy-expand-data.service" ] || { echo "FAIL: katoy-expand-data.service missing"; exit 1; }

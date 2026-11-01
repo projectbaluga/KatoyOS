@@ -1,0 +1,48 @@
+diff --git a/config b/config
+index 5c05cb0..baac481 100644
+--- a/config
++++ b/config
+@@ -16,3 +16,4 @@ KATOY_PRUNE_KERNELS=1               # drop Pi 1/Zero and 64-bit kernels (Pi 3B u
+ 
+ KATOY_KIOSK=1                       # 1 = power on straight into the karaoke player (no desktop)
+ KATOY_OVERLAYFS=0                   # 1 = read-only root with RAM overlay (UNVERIFIED on real Pi 3B hardware; logs vanish on reboot)
++KATOY_FKMS=1                       # 1 = vc4-fkms-v3d (needed for the X11 kiosk on Pi 3B); 0 = stock full-KMS vc4-kms-v3d
+diff --git a/stage-katoy/04-pi3/00-run.sh b/stage-katoy/04-pi3/00-run.sh
+index 500f100..6ca1375 100755
+--- a/stage-katoy/04-pi3/00-run.sh
++++ b/stage-katoy/04-pi3/00-run.sh
+@@ -5,6 +5,13 @@ R="${ROOTFS_DIR}"
+ # (vc4-kms-v3d is already enabled by pi-gen.)
+ CFG="$R/boot/firmware/config.txt"
+ [ -f "$CFG" ] || CFG="$R/boot/config.txt"
++# Pi 3B + Xorg (modesetting) + software rendering shows a blank screen after the splash with full KMS
++# (vc4-kms-v3d). Fake KMS (vc4-fkms-v3d) keeps the firmware in charge of the display and works.
++# Verified on a real Pi 3: switching this one line made the player UI appear.
++if [ "${KATOY_FKMS:-1}" = "1" ]; then
++	sed -i -E 's/^dtoverlay=vc4-kms-v3d/dtoverlay=vc4-fkms-v3d/' "$CFG"
++fi
++
+ cat >> "$CFG" <<CF
+ 
+ [all]
+diff --git a/tools/test-stage.sh b/tools/test-stage.sh
+index 0b86a43..889f24d 100755
+--- a/tools/test-stage.sh
++++ b/tools/test-stage.sh
+@@ -77,12 +77,14 @@ echo "=== Running Assertions ==="
+ 
+ # 1. Assert config.txt ends with [all] block and has single vc4-kms-v3d
+ CFG="$WORK_DIR/boot/firmware/config.txt"
+-VC4_COUNT=$(grep -c "dtoverlay=vc4-kms-v3d" "$CFG" || true)
++VC4_COUNT=$(grep -cE "^dtoverlay=vc4-f?kms-v3d" "$CFG" || true)
+ if [ "$VC4_COUNT" -ne 1 ]; then
+-    echo "FAIL: Expected exactly 1 instance of vc4-kms-v3d in config.txt, found $VC4_COUNT"
++    echo "FAIL: Expected exactly 1 vc4-kms/fkms overlay in config.txt, found $VC4_COUNT"
+     exit 1
+ fi
+ 
++grep -q "^dtoverlay=vc4-fkms-v3d" "$CFG" || { echo "FAIL: Pi 3 needs vc4-fkms-v3d (full KMS gives a blank screen with the X11 kiosk)"; exit 1; }
++
+ if ! sed -n '/^\[all\]/,$p' "$CFG" | grep -q "disable_splash=1"; then
+     echo "FAIL: config.txt [all] block does not contain disable_splash=1"
+     exit 1

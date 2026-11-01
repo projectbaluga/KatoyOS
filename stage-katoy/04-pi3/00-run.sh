@@ -5,6 +5,13 @@ R="${ROOTFS_DIR}"
 # (vc4-kms-v3d is already enabled by pi-gen.)
 CFG="$R/boot/firmware/config.txt"
 [ -f "$CFG" ] || CFG="$R/boot/config.txt"
+# Pi 3B + Xorg (modesetting) + software rendering shows a blank screen after the splash with full KMS
+# (vc4-kms-v3d). Fake KMS (vc4-fkms-v3d) keeps the firmware in charge of the display and works.
+# Verified on a real Pi 3: switching this one line made the player UI appear.
+if [ "${KATOY_FKMS:-1}" = "1" ]; then
+	sed -i -E 's/^dtoverlay=vc4-kms-v3d/dtoverlay=vc4-fkms-v3d/' "$CFG"
+fi
+
 cat >> "$CFG" <<CF
 
 [all]

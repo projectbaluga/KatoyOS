@@ -1,0 +1,8 @@
+// KatoyOS appliance: package operations must never stop to ask a question.
+Dpkg::Options { "--force-confdef"; "--force-confold"; };
+APT::Get::Assume-Yes "true";
+Dpkg::Use-Pty "false";
+
+// Log which process started apt/dpkg (see /usr/lib/katoyos/apt-trace).
+DPkg::Pre-Invoke { "/usr/lib/katoyos/apt-trace"; };
+APT::Update::Pre-Invoke { "/usr/lib/katoyos/apt-trace"; };

@@ -33,7 +33,7 @@ if grep -q "overlay" /proc/mounts; then
 fi
 
 echo "Updating KatoyOS packages..."
-sudo apt update && sudo apt full-upgrade -y
+sudo apt update && sudo env DEBIAN_FRONTEND=noninteractive apt full-upgrade -y
 echo
 echo "Done. Restart if the kernel or system packages were updated."
 read -rp "Press Enter to close."

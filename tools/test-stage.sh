@@ -166,4 +166,17 @@ grep -q "^fatresize" "$REPO_ROOT/stage-katoy/00-packages/00-packages-nr" || { ec
 [ -f "$WORK_DIR/usr/share/applications/katoy-karaoke.desktop" ] || { echo "FAIL: katoy-karaoke.desktop missing"; exit 1; }
 [ -f "$WORK_DIR/usr/share/backgrounds/katoyos/default.png" ] || { echo "FAIL: wallpaper missing"; exit 1; }
 
+# Blue "Package configuration" screen hardening
+[ -x "$WORK_DIR/usr/lib/katoyos/apt-trace" ] || { echo "FAIL: apt-trace hook missing"; exit 1; }
+grep -q "Dpkg::Options" "$WORK_DIR/etc/apt/apt.conf.d/90katoy-noninteractive" || { echo "FAIL: apt noninteractive config missing"; exit 1; }
+grep -q "debconf debconf/frontend select Noninteractive" "$REPO_ROOT/stage-katoy/04-pi3/00-run.sh" || { echo "FAIL: debconf frontend not forced noninteractive"; exit 1; }
+grep -q "dpkg --configure -a" "$REPO_ROOT/stage-katoy/04-pi3/00-run.sh" || { echo "FAIL: build does not finish half-configured packages"; exit 1; }
+grep -q "mask apt-daily" "$REPO_ROOT/stage-katoy/04-pi3/00-run.sh" || { echo "FAIL: apt timers not masked"; exit 1; }
+
+# Song partition expansion must verify its result and must not mark failure as success
+EXP="$REPO_ROOT/stage-katoy/03-tools/files/katoy-expand-data"
+bash -n "$EXP" || { echo "FAIL: katoy-expand-data syntax error"; exit 1; }
+grep -q "fs_fills_partition" "$EXP" || { echo "FAIL: katoy-expand-data does not verify the filesystem size"; exit 1; }
+grep -q "mtools" "$REPO_ROOT/stage-katoy/00-packages/00-packages-nr" || { echo "FAIL: mtools missing from package list"; exit 1; }
+
 echo "=== All test harness assertions PASSED successfully! ==="

@@ -147,11 +147,25 @@ fi
 on_chroot << 'CHEOF'
 export DEBIAN_FRONTEND=noninteractive
 apt-get purge -y unattended-upgrades || true
-systemctl mask apt-daily.service apt-daily-upgrade.service >/dev/null 2>&1 || true
-systemctl disable apt-daily.timer apt-daily-upgrade.timer >/dev/null 2>&1 || true
+
+# Nothing on this appliance may ever show the blue "Package configuration" screen.
+# 1) debconf: never use a dialog frontend, never ask below "critical" priority.
+echo 'debconf debconf/frontend select Noninteractive' | debconf-set-selections
+echo 'debconf debconf/priority select critical' | debconf-set-selections
+# 2) mask (not just disable) everything that can start apt/dpkg by itself.
+systemctl mask apt-daily.service apt-daily-upgrade.service apt-daily.timer apt-daily-upgrade.timer \
+	apt-listchanges.service apt-listchanges.timer packagekit.service packagekit-offline-update.service \
+	man-db.timer >/dev/null 2>&1 || true
 mkdir -p /etc/apt/apt.conf.d
 cat > /etc/apt/apt.conf.d/20auto-upgrades <<'EOF'
+APT::Periodic::Update-Package-Lists "0";
 APT::Periodic::Unattended-Upgrade "0";
 EOF
+# 3) the image must not ship a half-configured package: that is what makes dpkg ask questions later.
+dpkg --configure -a
+bad=$(dpkg -l | awk 'NR>5 && $1 !~ /^(ii|rc|un)$/ {print $1, $2}')
+if [ -n "$bad" ]; then
+	echo "ERROR: packages not fully configured:"; echo "$bad"; exit 1
+fi
 apt-get clean
 CHEOF

@@ -43,3 +43,5 @@ xkb-data
 # disk partitioning and FAT32 expansion
 parted
 fatresize
+dosfstools
+mtools

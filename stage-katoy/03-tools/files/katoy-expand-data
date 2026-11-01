@@ -1,52 +1,182 @@
 #!/bin/bash
-# First-boot oneshot script to expand KATOYDATA FAT32 partition to fill the remaining SD card space.
-set -e
+# Grow the KATOYDATA (FAT32) song partition to fill the whole SD card.
+#
+# Runs once at first boot (katoy-expand-data.service). Usage:
+#   katoy-expand-data           normal run (skips if already done)
+#   katoy-expand-data --force   run again (e.g. after moving the card to a bigger one)
+#   katoy-expand-data --status  show partition vs filesystem size and exit
+#
+# Steps: 1) grow the partition table entry  2) grow the FAT32 filesystem with fatresize
+#        3) VERIFY the result by reading the FAT boot sector  4) if fatresize did nothing and the
+#        partition still holds only the factory files, recreate the filesystem at full size.
+# The "done" marker is written only after step 3 confirms the filesystem really grew, so a
+# failed attempt is retried on the next boot (max 3 tries) instead of being silently forgotten.
+set -u
 
-MARKER_DIR="/var/lib/katoyos"
-MARKER_FILE="${MARKER_DIR}/katoy-data-expanded"
+LABEL="KATOYDATA"
+export MTOOLS_SKIP_CHECK=1
+STATE_DIR="/var/lib/katoyos"
+MARKER="${STATE_DIR}/katoy-data-expanded"
+TRIES="${STATE_DIR}/katoy-data-expand-tries"
+LOG="/var/log/katoy-expand-data.log"
+MOUNTPOINT="/media/katoy/${LABEL}"
+README_TXT="KatoyOS KaraOkePi Data Drive (KATOYDATA)
 
-if [ -f "$MARKER_FILE" ]; then
-    echo "KATOYDATA partition already expanded; skipping."
-    exit 0
+You can copy songs (.mid / .kar), soundfonts (.sf2), and background wallpapers
+directly onto this partition from Windows, Mac, or Linux.
+
+Foldering suggestions:
+  - /songs/        : Put MIDI / KAR karaoke files here
+  - /soundfonts/   : Custom SoundFont (.sf2) files
+  - /backgrounds/  : Custom background images (.png / .jpg)
+"
+
+log() { echo "$(date '+%F %T') $*" | tee -a "$LOG" >&2; }
+
+# Little-endian integer of $3 bytes at offset $2 of $1.
+read_le() { od -An -v -tu1 -j"$2" -N"$3" "$1" | awk '{v=0; for(i=NF;i>=1;i--) v=v*256+$i; printf "%.0f\n", v}'; }
+
+# Size in bytes of the FAT32 filesystem, taken from its boot sector.
+fs_bytes() {
+	local bps tot
+	bps=$(read_le "$1" 11 2); tot=$(read_le "$1" 32 4)
+	awk -v b="${bps:-0}" -v t="${tot:-0}" 'BEGIN{printf "%.0f\n", b*t}'
+}
+
+# Succeeds when the filesystem fills (at least 98% of) the partition.
+fs_fills_partition() {
+	local fs part
+	fs=$(fs_bytes "$1"); part=$(blockdev --getsize64 "$1")
+	awk -v f="$fs" -v p="$part" 'BEGIN{exit !(p > 0 && f >= p * 0.98)}'
+}
+
+# Succeeds when the partition holds nothing but the factory layout (README + empty folders).
+# Windows/macOS housekeeping folders are ignored. Needs mtools, which reads the device directly.
+is_factory_only() {
+	command -v mdir >/dev/null 2>&1 || return 1
+	local extra
+	extra=$(mdir -/ -b -i "$1" :: 2>/dev/null \
+		| grep -v -E '^::/?(README\.txt|songs|soundfonts|backgrounds)/?$' \
+		| grep -v -E '^::/?(System Volume Information|\.Trashes|\.fseventsd|\.Spotlight-V100|\._)' || true)
+	[ -z "$extra" ]
+}
+
+recreate_fs() {
+	local part="$1"
+	log "Recreating ${LABEL} filesystem at full size (factory files only, nothing to lose)."
+	mkfs.vfat -F 32 -s 8 -n "$LABEL" "$part" >>"$LOG" 2>&1 || return 1
+	local tmp; tmp=$(mktemp)
+	printf '%s' "$README_TXT" >"$tmp"
+	mmd -i "$part" ::songs ::soundfonts ::backgrounds >>"$LOG" 2>&1 || true
+	mcopy -i "$part" "$tmp" ::README.txt >>"$LOG" 2>&1 || true
+	rm -f "$tmp"
+}
+
+# Fallback when fatresize cannot grow a filesystem that already holds the user's files:
+# copy everything to the root filesystem, recreate the filesystem at full size, copy it back.
+# Only attempted when the files fit on the root filesystem with 256 MiB to spare; the backup
+# is deleted only after the restored file count matches.
+backup_recreate_restore() {
+	local part="$1" bk="/var/tmp/katoydata-backup" free used avail before after
+	free=$(mdir -i "$part" :: 2>/dev/null | awk '/bytes free/ {gsub(/ /,"",$0); sub(/bytesfree/,"",$0); print}' | tail -n1)
+	free=${free//[^0-9]/}
+	used=$(( $(fs_bytes "$part") - ${free:-0} ))
+	avail=$(df -B1 --output=avail /var/tmp | tail -n1 | tr -d ' ')
+	if [ "$used" -gt $(( avail - 268435456 )) ]; then
+		log "Not enough space on the root filesystem to back up $(( used / 1048576 )) MiB of songs; leaving $LABEL untouched."
+		return 1
+	fi
+	log "Backing up $(( used / 1048576 )) MiB from $LABEL, recreating it at full size, then restoring."
+	rm -rf "$bk"; mkdir -p "$bk"
+	mcopy -s -p -m -n -i "$part" :: "$bk" >>"$LOG" 2>&1 || { log "Backup failed; $LABEL left untouched."; rm -rf "$bk"; return 1; }
+	before=$(find "$bk" -type f | wc -l)
+	recreate_fs "$part" || { log "mkfs failed; backup kept in $bk"; return 1; }
+	mcopy -s -p -m -n -i "$part" "$bk"/* :: >>"$LOG" 2>&1 || true
+	after=$(mdir -/ -b -i "$part" :: 2>/dev/null | grep -v '/$' | grep -v -c '^::/README.txt$' || true)
+	if [ "${after:-0}" -ge "$(( before - 1 ))" ] && [ "$before" -gt 0 ] || [ "$before" -eq 0 ]; then
+		rm -rf "$bk"
+		log "Restored $before file(s)."
+	else
+		log "Restore count mismatch (before=$before after=$after); backup kept in $bk"
+		return 1
+	fi
+}
+
+# --- locate the partition by label (works for SD and USB boot) ---
+PART=$(blkid -L "$LABEL" 2>/dev/null || true)
+[ -z "$PART" ] && [ -b /dev/mmcblk0p3 ] && PART=/dev/mmcblk0p3
+
+case "${1:-}" in
+--status)
+	[ -b "$PART" ] || { echo "No $LABEL partition found."; exit 1; }
+	echo "partition: $(blockdev --getsize64 "$PART") bytes"
+	echo "filesystem: $(fs_bytes "$PART") bytes"
+	fs_fills_partition "$PART" && echo "OK: filesystem fills the partition" || echo "NOT expanded"
+	exit 0 ;;
+--force)
+	rm -f "$MARKER" "$TRIES" ;;
+esac
+
+mkdir -p "$STATE_DIR"
+[ -f "$MARKER" ] && { echo "KATOYDATA already expanded; skipping."; exit 0; }
+
+if [ -z "$PART" ] || [ ! -b "$PART" ]; then
+	log "No $LABEL partition found; nothing to expand."
+	: >"$MARKER"
+	exit 0
 fi
 
-mkdir -p "$MARKER_DIR"
-
-# Identify partition 3 or partition with label KATOYDATA on MMC/SD device
-DEV="/dev/mmcblk0"
-PART="${DEV}p3"
-
-if [ ! -b "$PART" ]; then
-    echo "Partition $PART not found; skipping expansion."
-    touch "$MARKER_FILE"
-    exit 0
+n=$(( $(cat "$TRIES" 2>/dev/null || echo 0) + 1 ))
+echo "$n" >"$TRIES"
+if [ "$n" -gt 3 ]; then
+	log "Giving up after 3 failed attempts. Run 'sudo katoy-expand-data --force' to try again."
+	exit 0
 fi
 
-echo "Expanding $PART to fill remaining disk space..."
+PKNAME=$(lsblk -no PKNAME "$PART" | head -n1)
+DEV="/dev/${PKNAME}"
+PARTNUM=$(cat "/sys/class/block/$(basename "$PART")/partition")
+log "Expanding $PART (partition $PARTNUM of $DEV), attempt $n."
 
-# Unmount if currently mounted to allow clean partition and filesystem resize
+# The partition must be unmounted while it is resized.
+systemctl stop "$(systemd-escape -p --suffix=mount "$MOUNTPOINT")" 2>/dev/null || true
 umount "$PART" 2>/dev/null || true
-umount /media/katoy/KATOYDATA 2>/dev/null || true
+if grep -q "^$PART " /proc/mounts; then
+	log "$PART is still mounted; will retry on the next boot."
+	exit 0
+fi
 
-# Expand partition 3 to 100% of disk space
+# 1) grow the partition entry to the end of the card
 if command -v parted >/dev/null 2>&1; then
-    parted -s "$DEV" resizepart 3 100% || true
+	parted -s "$DEV" resizepart "$PARTNUM" 100% >>"$LOG" 2>&1 || log "parted resizepart failed"
 elif command -v growpart >/dev/null 2>&1; then
-    growpart "$DEV" 3 || true
+	growpart "$DEV" "$PARTNUM" >>"$LOG" 2>&1 || log "growpart failed"
 fi
-
-# Inform kernel of partition table changes
+partx -u "$DEV" >>"$LOG" 2>&1 || true
 udevadm settle 2>/dev/null || true
-blockdev --rereadpt "$DEV" 2>/dev/null || true
 
-# Grow FAT32 filesystem
-if command -v fatresize >/dev/null 2>&1; then
-    fatresize -s max "$PART" || true
+# 2) grow the filesystem in place (keeps any songs already copied onto the card)
+if ! fs_fills_partition "$PART" && command -v fatresize >/dev/null 2>&1; then
+	fatresize -f -s max "$PART" >>"$LOG" 2>&1 || log "fatresize failed"
 fi
 
-# Remount filesystems
-mount -a 2>/dev/null || true
+# 3) verify, and fall back to recreating an empty filesystem if nothing was lost by doing so
+if ! fs_fills_partition "$PART"; then
+	if is_factory_only "$PART"; then
+		recreate_fs "$PART" || log "mkfs.vfat failed"
+	else
+		log "fatresize could not grow the filesystem and $LABEL contains your files."
+		backup_recreate_restore "$PART" || true
+	fi
+fi
 
-touch "$MARKER_FILE"
-echo "KATOYDATA partition expansion finished successfully."
+if fs_fills_partition "$PART"; then
+	log "SUCCESS: $LABEL is now $(( $(blockdev --getsize64 "$PART") / 1048576 )) MiB."
+	: >"$MARKER"
+else
+	log "Filesystem still smaller than the partition; will retry on the next boot."
+fi
+
+# Remount (fstab entry has nofail)
+mount "$MOUNTPOINT" 2>/dev/null || mount -a 2>/dev/null || true
 exit 0

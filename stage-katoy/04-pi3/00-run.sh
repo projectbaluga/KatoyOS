@@ -10,10 +10,6 @@ cat >> "$CFG" <<CF
 [all]
 # --- KatoyOS ---
 disable_splash=1
-hdmi_force_hotplug=1
-hdmi_drive=2
-hdmi_group=1
-hdmi_mode=16
 disable_overscan=1
 CF
 
@@ -22,11 +18,14 @@ CMD="$R/boot/firmware/cmdline.txt"
 [ -f "$CMD" ] || CMD="$R/boot/cmdline.txt"
 # Strip any stock pi-gen first-boot init_resize.sh kernel argument to prevent p2 rootfs expansion from corrupting p3 KATOYDATA
 sed -i -E 's/init=\/usr\/(lib|libexec)\/raspi-config\/init_resize\.sh//g' "$CMD"
+# Trixie pi-gen uses a bare `resize` kernel arg + rpi-resize.service instead of init_resize.sh.
+# Strip it too: growing p2 would collide with the KATOYDATA partition (p3) that follows it.
+sed -i -E 's/ resize( |$)/\1/g' "$CMD"
 sed -i 's/ *$/ quiet splash plymouth.ignore-serial-consoles loglevel=3 logo.nologo vt.global_cursor_default=0/' "$CMD"
 
 # Disable stock rootfs resize services (resizing p2 rootfs would overlap/corrupt p3 KATOYDATA partition)
 on_chroot << 'CHEOF'
-for u in resize2fs_once.service raspi-config.service; do
+for u in resize2fs_once.service raspi-config.service rpi-resize.service; do
 	systemctl disable "$u" >/dev/null 2>&1 || true
 	systemctl mask "$u" >/dev/null 2>&1 || true
 done

@@ -28,6 +28,10 @@ pipewire-pulse
 wireplumber
 pavucontrol-qt
 timgm6mb-soundfont
+# REQUIRED by katoy-karaoke (top-level `import mido`, libfluidsynth via ctypes).
+# If either is missing the player dies before opening a window => black screen after the splash.
+fluidsynth
+python3-mido
 pulseaudio-utils
 alsa-utils
 # boot splash + Welcome app runtime

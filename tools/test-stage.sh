@@ -49,7 +49,7 @@ CONSOLE_UART=1
 EOF
 
 cat > "$WORK_DIR/boot/firmware/cmdline.txt" <<'EOF'
-console=serial0,115200 console=tty1 root=ROOTDEV rootfstype=ext4 fsck.repair=yes rootwait
+console=serial0,115200 console=tty1 root=ROOTDEV rootfstype=ext4 fsck.repair=yes rootwait resize
 EOF
 
 # Define stub on_chroot function and export required variables
@@ -147,6 +147,10 @@ grep -q "^KIOSK=1" "$WORK_DIR/etc/katoyos/karaoke.conf" || { echo "FAIL: karaoke
 # 5. Assert installed tools and files exist with correct modes
 [ -d "$WORK_DIR/media/katoy/KATOYDATA" ] || { echo "FAIL: KATOYDATA mountpoint missing"; exit 1; }
 grep -q "LABEL=KATOYDATA /media/katoy/KATOYDATA vfat" "$WORK_DIR/etc/fstab" || { echo "FAIL: KATOYDATA fstab entry missing"; exit 1; }
+! grep -qE '(^| )resize( |$)' "$CMD" || { echo "FAIL: bare 'resize' arg was not stripped from cmdline.txt"; exit 1; }
+! grep -q "hdmi_mode" "$CFG" || { echo "FAIL: legacy hdmi_mode still present in config.txt"; exit 1; }
+grep -q "^fluidsynth" "$REPO_ROOT/stage-katoy/00-packages/00-packages-nr" || { echo "FAIL: fluidsynth must be a required package"; exit 1; }
+grep -q "^python3-mido" "$REPO_ROOT/stage-katoy/00-packages/00-packages-nr" || { echo "FAIL: python3-mido must be a required package (katoy-karaoke imports it at top level)"; exit 1; }
 ! grep -q "init_resize.sh" "$CMD" || { echo "FAIL: init_resize.sh was not stripped from cmdline.txt"; exit 1; }
 [ -x "$WORK_DIR/usr/bin/katoy-expand-data" ] || { echo "FAIL: katoy-expand-data missing or not executable"; exit 1; }
 [ -f "$WORK_DIR/etc/systemd/system/katoy-expand-data.service" ] || { echo "FAIL: katoy-expand-data.service missing"; exit 1; }

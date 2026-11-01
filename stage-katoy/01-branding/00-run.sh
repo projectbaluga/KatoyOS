@@ -8,7 +8,12 @@ install -d "${ROOTFS_DIR}/usr/share/icons/hicolor/256x256/apps" "${ROOTFS_DIR}/u
 install -m 644 files/katoyos-256.png   "${ROOTFS_DIR}/usr/share/icons/hicolor/256x256/apps/katoyos.png"
 install -m 644 files/katoyos-64.png    "${ROOTFS_DIR}/usr/share/icons/hicolor/64x64/apps/katoyos.png"
 install -m 644 files/katoyos-256.png   "${ROOTFS_DIR}/usr/share/pixmaps/katoyos.png"
-install -m 644 files/plymouth-splash.png "${ROOTFS_DIR}/usr/share/plymouth/themes/katoyos/splash.png"
+# Support base64-encoded splash (workaround for binary file updates via API)
+if head -c 10 files/plymouth-splash.png | grep -q 'iVBORw0KGg'; then
+  base64 -d files/plymouth-splash.png > "${ROOTFS_DIR}/usr/share/plymouth/themes/katoyos/splash.png"
+else
+  install -m 644 files/plymouth-splash.png "${ROOTFS_DIR}/usr/share/plymouth/themes/katoyos/splash.png"
+fi
 install -m 644 files/plymouth/katoyos.plymouth "${ROOTFS_DIR}/usr/share/plymouth/themes/katoyos/"
 install -m 644 files/plymouth/katoyos.script   "${ROOTFS_DIR}/usr/share/plymouth/themes/katoyos/"
 

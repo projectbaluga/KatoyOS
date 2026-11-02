@@ -1,0 +1,102 @@
+/* Katoy-Win11 runner (Alt+F2), styled like the Windows search box */
+#panel {
+    background: #2c2c2c;
+    border: 1px solid #3a3a3a;
+    border-radius: 8px;
+}
+
+QToolButton::menu-indicator {
+    image: none;
+}
+
+#closeButton {
+    qproperty-icon: url(lxqt-runner/close.svg);
+    margin: 2px;
+    border: none;
+    border-radius: 4px;
+}
+
+#closeButton:hover {
+    background: #3a3a3a;
+}
+
+#actionButton {
+    qproperty-icon: url(lxqt-runner/down-arrow.svg);
+    color: rgba(0, 0, 0, 0%);
+    margin: 2px;
+    border: none;
+    border-radius: 4px;
+}
+
+#actionButton:hover,
+#actionButton:pressed {
+    background: #3a3a3a;
+}
+
+#commandEd {
+    background: #383838;
+    border: 1px solid #454545;
+    border-bottom: 2px solid #60cdff;
+    border-radius: 4px;
+    padding: 8px;
+    margin-bottom: 4px;
+    color: #ffffff;
+    selection-color: #000000;
+    selection-background-color: #60cdff;
+}
+
+#commandList {
+    border: none;
+    background: #2c2c2c;
+    alternate-background-color: #2c2c2c;
+    color: #ffffff;
+    selection-background-color: #3a3a3a;
+    selection-color: #ffffff;
+}
+
+#commandList::item {
+    background: #2c2c2c;
+    color: #ffffff;
+    padding: 4px;
+    border-radius: 4px;
+}
+
+#commandList::item:alternate {
+    background: #2c2c2c;
+}
+
+#commandList::item:hover,
+#commandList::item:selected {
+    background: #3a3a3a;
+    color: #ffffff;
+}
+
+QMenu {
+    margin: 0px;
+    padding: 4px;
+    border: 1px solid #3a3a3a;
+    border-radius: 8px;
+    background: #2c2c2c;
+    color: #ffffff;
+}
+
+QMenu::separator {
+    background-color: #3f3f3f;
+    height: 1px;
+    margin: 4px 8px;
+}
+
+QMenu::item {
+    border-radius: 4px;
+    padding: 6px 36px 6px 12px;
+    background: transparent;
+    color: #ffffff;
+}
+
+QMenu::item:selected {
+    background: #3a3a3a;
+}
+
+QMenu::item:disabled {
+    color: #6d6d6d;
+}

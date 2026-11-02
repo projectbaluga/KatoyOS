@@ -6,11 +6,13 @@ from pathlib import Path
 
 from PyQt6.QtGui import QIcon
 from PyQt6.QtWidgets import (QApplication, QCheckBox, QComboBox, QFormLayout, QHBoxLayout,
-                             QLabel, QLineEdit, QMessageBox, QPushButton, QStackedWidget,
-                             QVBoxLayout, QWidget)
+                             QLabel, QLineEdit, QMessageBox, QProgressBar, QPushButton,
+                             QStackedWidget, QVBoxLayout, QWidget)
 
 DONE = Path.home() / ".config/katoyos/welcome-done"
 HELPER = ["pkexec", "/usr/lib/katoyos/helper"]
+STYLE = Path("/usr/share/katoyos/win11/katoy-win11.qss")
+ZONEINFO = Path("/usr/share/zoneinfo/iso3166.tab")
 
 
 def helper(*args, stdin=None):
@@ -27,7 +29,8 @@ def out(cmd):
 
 def countries():
     items = []
-    for line in Path("/usr/share/zoneinfo/iso3166.tab").read_text().splitlines() if Path("/usr/share/zoneinfo/iso3166.tab").exists() else []:
+    lines = ZONEINFO.read_text().splitlines() if ZONEINFO.exists() else []
+    for line in lines:
         if line and not line.startswith("#") and "\t" in line:
             code, name = line.split("\t", 1)
             items.append((name, code))
@@ -52,9 +55,12 @@ def layouts():
 def page(title, body, extra=None):
     w = QWidget()
     lay = QVBoxLayout(w)
+    lay.setContentsMargins(40, 32, 40, 8)
+    lay.setSpacing(16)
     t = QLabel(title)
-    t.setStyleSheet("font-size: 22px; font-weight: 600;")
+    t.setObjectName("title")
     b = QLabel(body)
+    b.setObjectName("body")
     b.setWordWrap(True)
     lay.addWidget(t)
     lay.addWidget(b)
@@ -69,7 +75,7 @@ class Wizard(QWidget):
         super().__init__()
         self.setWindowTitle("Welcome to KatoyOS")
         self.setWindowIcon(QIcon.fromTheme("katoyos"))
-        self.resize(580, 440)
+        self.resize(660, 480)
 
         self.skip = QCheckBox("Don't show this on startup")
         self.net_btn = QPushButton("Open network setup")
@@ -116,14 +122,22 @@ class Wizard(QWidget):
         self.stack = QStackedWidget()
         for p in self.pages:
             self.stack.addWidget(p)
+        self.progress = QProgressBar()
+        self.progress.setRange(0, len(self.pages) - 1)
+        self.progress.setTextVisible(False)
         self.back, self.next = QPushButton("Back"), QPushButton("Next")
+        self.next.setObjectName("accent")
         self.back.clicked.connect(lambda: self.go(-1))
         self.next.clicked.connect(self.on_next)
         nav = QHBoxLayout()
         nav.addWidget(self.back)
         nav.addStretch()
         nav.addWidget(self.next)
+        nav.setContentsMargins(40, 0, 40, 24)
         outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
+        outer.addWidget(self.progress)
         outer.addWidget(self.stack, 1)
         outer.addLayout(nav)
         self.update_nav()
@@ -136,6 +150,7 @@ class Wizard(QWidget):
         i = self.stack.currentIndex()
         self.back.setEnabled(i > 0)
         self.next.setText("Finish" if i == len(self.pages) - 1 else "Next")
+        self.progress.setValue(i)
 
     def on_next(self):
         if self.stack.currentIndex() == len(self.pages) - 1:
@@ -183,6 +198,8 @@ if __name__ == "__main__":
     if "--first-run" in sys.argv and DONE.exists():
         sys.exit(0)
     app = QApplication(sys.argv)
+    if STYLE.exists():
+        app.setStyleSheet(STYLE.read_text())
     w = Wizard()
     w.show()
     sys.exit(app.exec())

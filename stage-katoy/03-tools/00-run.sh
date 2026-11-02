@@ -1,6 +1,6 @@
 #!/bin/bash -e
 R="${ROOTFS_DIR}"
-install -d "$R/usr/bin" "$R/usr/lib/katoyos" "$R/usr/share/applications" "$R/usr/share/polkit-1/actions" "$R/etc/xdg/autostart"
+install -d "$R/usr/bin" "$R/usr/lib/katoyos" "$R/usr/share/katoyos/win11" "$R/usr/share/applications" "$R/usr/share/polkit-1/actions" "$R/etc/xdg/autostart"
 install -m 755 files/katoy-browser   "$R/usr/bin/katoy-browser"
 install -m 755 files/katoy-welcome   "$R/usr/bin/katoy-welcome"
 install -m 755 files/katoy-powerwatch "$R/usr/bin/katoy-powerwatch"
@@ -13,3 +13,4 @@ install -m 644 files/katoy-update.desktop   "$R/usr/share/applications/katoy-upd
 install -m 644 files/katoy-welcome-autostart.desktop "$R/etc/xdg/autostart/katoy-welcome.desktop"
 install -m 644 files/katoy-powerwatch.desktop        "$R/etc/xdg/autostart/katoy-powerwatch.desktop"
 install -m 644 files/katoy-noblank.desktop           "$R/etc/xdg/autostart/katoy-noblank.desktop"
+install -m 644 files/win11/katoy-win11.qss files/win11/check.svg files/win11/chevron-down.svg "$R/usr/share/katoyos/win11/"

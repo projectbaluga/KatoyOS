@@ -1,0 +1,30 @@
+/* Katoy-Win11 notification toast */
+Notification {
+    color: #ffffff;
+    border: 1px solid #3a3a3a;
+    border-radius: 8px;
+    background: #2c2c2c;
+    margin: 0px;
+}
+
+QLabel {
+    color: #ffffff;
+}
+
+#appLabel {
+    color: #9d9d9d;
+    font-weight: normal;
+}
+
+#closeButton {
+    border: none;
+    border-radius: 4px;
+    padding: 2px;
+    qproperty-icon: url(lxqt-notificationd/cancel.svg);
+}
+
+#closeButton:hover {
+    background: #3a3a3a;
+    padding: 2px;
+    qproperty-icon: url(lxqt-notificationd/cancel.svg);
+}

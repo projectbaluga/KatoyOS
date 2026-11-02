@@ -8,7 +8,7 @@ Features:
  - Song Reservation / Queueing System
  - Key/Pitch Transposition (-6 to +6)
  - Tempo Adjustment (50% to 150%)
- - Pinoy Videoke Cosmetic Scoring Banner System (85-100 with praise text)
+ - KaraOkePi Cosmetic Scoring Banner System (85-100 with praise text)
  - Real-time highlighted synchronized lyrics & background slideshow
 """
 
@@ -415,7 +415,7 @@ def check_and_trigger_wifi_hotspot(config):
         res = subprocess.run(["nmcli", "-t", "-g", "STATE", "general"], capture_output=True, text=True)
         state = parse_nmcli_general_state(res.stdout)
         if state in ("disconnected", "unknown"):
-            ssid = config.get("HOTSPOT_SSID", "KatoyOS-Karaoke")
+            ssid = config.get("HOTSPOT_SSID", "KaraOkePi")
             password = config.get("HOTSPOT_PASSWORD", "katoyos123")
             ifname = config.get("HOTSPOT_IFNAME", "wlan0")
             subprocess.run(
@@ -486,7 +486,7 @@ class NetworkWatcher(QThread):
             time.sleep(0.2)
 
     def run(self):
-        ssid = self.config.get("HOTSPOT_SSID", "KatoyOS-Karaoke")
+        ssid = self.config.get("HOTSPOT_SSID", "KaraOkePi")
         offline_since = None
         last_attempt = -1e9
         last = None
@@ -560,6 +560,20 @@ def generate_qr_matrix(text):
         return matrix
 
 
+# Canonical brand & UI theme palette
+HEX_PINK = "#ff2e93"
+HEX_VIOLET = "#8b3cf0"
+HEX_CYAN = "#22d3ee"
+HEX_GOLD = "#ffd166"
+HEX_MINT = "#34d399"
+HEX_TEXT = "#f5f3ff"
+HEX_MUTED = "#a9a1d6"
+HEX_BG_TOP = "#0a061f"
+HEX_BG_BOTTOM = "#1c0f4a"
+
+THEME_ROOT_CSS = f":root{{--pink:{HEX_PINK};--violet:{HEX_VIOLET};--cyan:{HEX_CYAN};--gold:{HEX_GOLD};--mint:{HEX_MINT};--text:{HEX_TEXT};--muted:{HEX_MUTED};--bg-top:{HEX_BG_TOP};--bg-bottom:{HEX_BG_BOTTOM}}}"
+
+
 def create_qr_pixmap(text, scale=6, border=2, target_px=None):
     """QR code on a rounded white tile (quiet zone included, so phone cameras lock on fast).
 
@@ -592,7 +606,7 @@ REMOTE_HTML = r"""<!DOCTYPE html>
 <meta name="theme-color" content="#0a061f">
 <title>KaraOkePi Remote</title>
 <style>
-:root{--pink:#ff2e93;--violet:#8b3cf0;--cyan:#22d3ee;--gold:#ffd166;--mint:#34d399;--muted:#a9a1d6}
+__THEME_ROOT_CSS__
 *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
 body{margin:0;min-height:100vh;color:#f5f3ff;font-family:Inter,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
  background:radial-gradient(700px 420px at 0% 0%,rgba(255,46,147,.30),transparent 62%),radial-gradient(700px 460px at 100% 100%,rgba(34,211,238,.22),transparent 60%),linear-gradient(#0a061f,#1c0f4a);
@@ -690,25 +704,32 @@ async function state(){
  $('#queue').innerHTML=d.queue.length?d.queue.map((s,i)=>`<div class="q"><div class="n">${i+1}</div><div><b>${esc(s[1])}</b><br><small class="muted">${esc(s[0])} \u00b7 ${esc(s[2])}</small></div></div>`).join(''):'Queue is empty';
 }
 search(true);state();setInterval(state,2000);
-</script></body></html>"""
+</script></body></html>""".replace("__THEME_ROOT_CSS__", THEME_ROOT_CSS)
+
+
 
 WIFI_HTML = r"""<!DOCTYPE html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="__BG_TOP__">
 <title>KaraOkePi Wi-Fi Setup</title>
 <style>
+__THEME_ROOT_CSS__
 *{box-sizing:border-box}
-body{margin:0;min-height:100vh;display:grid;place-items:center;padding:20px;color:#f5f3ff;font-family:Inter,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
- background:radial-gradient(700px 420px at 0% 0%,rgba(255,46,147,.30),transparent 62%),radial-gradient(700px 460px at 100% 100%,rgba(34,211,238,.22),transparent 60%),linear-gradient(#0a061f,#1c0f4a)}
+body{margin:0;min-height:100vh;display:grid;place-items:center;padding:20px;color:var(--text);font-family:Inter,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+ background:radial-gradient(700px 420px at 0% 0%,rgba(255,46,147,.30),transparent 62%),radial-gradient(700px 460px at 100% 100%,rgba(34,211,238,.22),transparent 60%),linear-gradient(var(--bg-top),var(--bg-bottom))}
 .card{width:100%;max-width:420px;background:rgba(255,255,255,.07);border:1px solid rgba(255,255,255,.13);border-radius:24px;padding:26px}
-h2{margin:0 0 6px;font-size:26px;font-weight:900;background:linear-gradient(90deg,#ff2e93,#ffd166);-webkit-background-clip:text;background-clip:text;color:transparent}
-p{color:#a9a1d6;margin:0 0 18px}label{display:block;font-weight:700;font-size:13px;letter-spacing:.08em;color:#a9a1d6;margin:14px 0 6px}
+header{display:flex;align-items:center;gap:12px;margin-bottom:14px}
+.logo{width:38px;height:38px;border-radius:12px;background:linear-gradient(135deg,var(--pink),var(--violet));display:grid;place-items:center;font-size:19px}
+h2{margin:0;font-size:24px;font-weight:900;background:linear-gradient(90deg,var(--pink),var(--gold));-webkit-background-clip:text;background-clip:text;color:transparent}
+p{color:var(--muted);margin:0 0 18px}label{display:block;font-weight:700;font-size:13px;letter-spacing:.08em;color:var(--muted);margin:14px 0 6px}
 select,input,button{width:100%;font:inherit;font-size:17px;color:#fff;border-radius:16px;padding:14px 16px;border:2px solid rgba(255,255,255,.16);background:rgba(255,255,255,.09);outline:none}
-select option{color:#000}input:focus,select:focus{border-color:#22d3ee}
-button{margin-top:20px;border:0;font-weight:800;background:linear-gradient(90deg,#34d399,#22d3ee);color:#052e22;cursor:pointer}
+select option{color:#000}input:focus,select:focus{border-color:var(--cyan)}
+button{margin-top:20px;border:0;font-weight:800;background:linear-gradient(90deg,var(--mint),var(--cyan));color:#052e22;cursor:pointer}
 #msg{margin-top:14px;font-weight:700;min-height:22px}
 </style></head><body><div class="card">
-<h2>Wi-Fi setup</h2><p>Pick your home network so the karaoke box can go online.</p>
+<header><div class="logo">&#127908;</div><h2>KaraOkePi</h2></header>
+<p>Pick your home network so the karaoke box can go online.</p>
 <label for="ssid">NETWORK</label><select id="ssid">__SSID_OPTIONS__</select>
 <label for="pass">PASSWORD</label><input type="password" id="pass" placeholder="Wi-Fi password" autocomplete="off">
 <button id="go">Connect</button><div id="msg"></div></div>
@@ -717,7 +738,7 @@ const PIN=new URLSearchParams(location.search).get('pin')||'';
 document.getElementById('go').addEventListener('click',async()=>{
  const s=document.getElementById('ssid').value,p=document.getElementById('pass').value,m=document.getElementById('msg');
  if(!s){m.textContent='Please pick a network';return}
- m.textContent='Connecting\u2026 this phone may lose the hotspot for a moment.';
+ m.textContent='Connecting… this phone may lose the hotspot for a moment.';
  let u='/wifi?ssid='+encodeURIComponent(s)+'&password='+encodeURIComponent(p)+(PIN?'&pin='+encodeURIComponent(PIN):'');
  try{const d=await (await fetch(u)).json();m.textContent=d.msg||d.error}catch(e){m.textContent='Applied. If the hotspot disappeared, the box is joining your Wi-Fi.'}
  // The phone usually drops off the hotspot mid-request; if it is still reachable, report the real outcome.
@@ -726,7 +747,7 @@ document.getElementById('go').addEventListener('click',async()=>{
    if(s.status==='ok'){m.textContent='Connected to '+s.ssid+'. Reconnect your phone to your normal Wi-Fi.';return}
    if(s.status==='error'){m.textContent='Could not join '+s.ssid+'. Check the password and try again.';return}}catch(e){}}
 });
-</script></body></html>"""
+</script></body></html>""".replace('__THEME_ROOT_CSS__', THEME_ROOT_CSS).replace('__BG_TOP__', HEX_BG_TOP)
 
 
 class RemoteBridgeSignals(QObject):
@@ -762,23 +783,65 @@ class RemoteRequestHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def send_redirect(self, location, code=302):
+        self.send_response(code)
+        self.send_header("Location", location)
+        self.send_header("Content-Length", "0")
+        self.send_header("Connection", "close")
+        self.end_headers()
+
+    def _serve_wifi_setup_page(self):
+        wifi_out = ""
+        if shutil.which("nmcli"):
+            try:
+                res = subprocess.run(["nmcli", "-t", "-f", "SSID,SIGNAL,SECURITY", "device", "wifi", "list"], capture_output=True, text=True)
+                wifi_out = res.stdout
+            except Exception:
+                pass
+        ssids = parse_nmcli_wifi_list(wifi_out)
+        opts = "".join(f"<option value='{html.escape(s, quote=True)}'>{html.escape(s)}</option>" for s in ssids)             if ssids else "<option value=''>No networks found</option>"
+        self.send_html(WIFI_HTML.replace("__SSID_OPTIONS__", opts))
+
     def do_GET(self):
         parsed = urllib.parse.urlparse(self.path)
         path = parsed.path
         params = urllib.parse.parse_qs(parsed.query)
 
         app = self.app_instance
+        hotspot_active = is_hotspot_active() or bool(app and getattr(app, "net_ap", False))
+
+        if hotspot_active:
+            port = app.config.get("REMOTE_PORT", "8080") if (app and hasattr(app, "config")) else "8080"
+            ip = app.net_ip if (app and hasattr(app, "net_ip") and app.net_ip and not app.net_ip.startswith("127.")) else "10.42.0.1"
+            portal_url = f"http://{ip}:{port}/"
+
+            probe_paths = (
+                "/generate_204",
+                "/gen_204",
+                "/hotspot-detect.html",
+                "/library/test/success.html",
+                "/connecttest.txt",
+                "/ncsi.txt",
+                "/redirect",
+                "/success.txt",
+            )
+            if path in probe_paths:
+                self.send_redirect(portal_url, 302)
+                return
 
         # REMOTE_PIN gates the player API. First-time Wi-Fi setup (/wifi, /setup, status polling) stays open
         # only while the box is in hotspot mode, so a phone that just scanned the QR code can configure it.
         setup_paths = ("/wifi", "/setup", "/wifi/status", "/api/wifi-status")
-        setup_open = path in setup_paths and bool(app and getattr(app, "net_ap", False))
+        setup_open = path in setup_paths and hotspot_active
         if self.pin and not setup_open and params.get("pin", [""])[0] != self.pin:
             self.send_json({"error": "Unauthorized / Invalid PIN"}, 401)
             return
 
         if path == "/":
-            self.send_html(REMOTE_HTML)
+            if hotspot_active:
+                self._serve_wifi_setup_page()
+            else:
+                self.send_html(REMOTE_HTML)
         elif path == "/api/search":
             q = params.get("q", [""])[0]
             offset = 0
@@ -862,19 +925,14 @@ class RemoteRequestHandler(BaseHTTPRequestHandler):
                     self.send_json({"error": f"Failed to connect: {e}"}, 500)
             else:
                 # GET /wifi: serve the setup page with an SSID scan
-                wifi_out = ""
-                if shutil.which("nmcli"):
-                    try:
-                        res = subprocess.run(["nmcli", "-t", "-f", "SSID,SIGNAL,SECURITY", "device", "wifi", "list"], capture_output=True, text=True)
-                        wifi_out = res.stdout
-                    except Exception:
-                        pass
-                ssids = parse_nmcli_wifi_list(wifi_out)
-                opts = "".join(f"<option value='{html.escape(s, quote=True)}'>{html.escape(s)}</option>" for s in ssids) \
-                    if ssids else "<option value=''>No networks found</option>"
-                self.send_html(WIFI_HTML.replace("__SSID_OPTIONS__", opts))
+                self._serve_wifi_setup_page()
         else:
-            self.send_json({"error": "Not Found"}, 404)
+            if hotspot_active:
+                port = app.config.get("REMOTE_PORT", "8080") if (app and hasattr(app, "config")) else "8080"
+                ip = app.net_ip if (app and hasattr(app, "net_ip") and app.net_ip and not app.net_ip.startswith("127.")) else "10.42.0.1"
+                self.send_redirect(f"http://{ip}:{port}/", 302)
+            else:
+                self.send_json({"error": "Not Found"}, 404)
 
 
 class ThreadedHTTPServer(ThreadingMixIn, HTTPServer):
@@ -1492,15 +1550,15 @@ def ui_font(px, weight=QFont.Weight.Normal, spacing=0.0):
     return f
 
 
-COL_PINK = QColor("#ff2e93")
-COL_VIOLET = QColor("#8b3cf0")
-COL_CYAN = QColor("#22d3ee")
-COL_GOLD = QColor("#ffd166")
-COL_MINT = QColor("#34d399")
-COL_TEXT = QColor("#f5f3ff")
-COL_MUTED = QColor("#a9a1d6")
-COL_BG_TOP = QColor("#0a061f")
-COL_BG_BOTTOM = QColor("#1c0f4a")
+COL_PINK = QColor(HEX_PINK)
+COL_VIOLET = QColor(HEX_VIOLET)
+COL_CYAN = QColor(HEX_CYAN)
+COL_GOLD = QColor(HEX_GOLD)
+COL_MINT = QColor(HEX_MINT)
+COL_TEXT = QColor(HEX_TEXT)
+COL_MUTED = QColor(HEX_MUTED)
+COL_BG_TOP = QColor(HEX_BG_TOP)
+COL_BG_BOTTOM = QColor(HEX_BG_BOTTOM)
 
 
 def build_qss():
@@ -2277,7 +2335,7 @@ class KaraokeApp(QWidget):
     # ── UI construction ─────────────────────────────────────────────────────────
     def init_ui(self):
         self.setObjectName("root")
-        self.setWindowTitle("KaraOkePi Pinoy Videoke Player")
+        self.setWindowTitle("KaraOkePi")
         self.setWindowIcon(QIcon.fromTheme("katoyos"))
         if self.kiosk:
             self.setCursor(Qt.CursorShape.BlankCursor)
@@ -2361,7 +2419,7 @@ class KaraokeApp(QWidget):
         brand_row.addWidget(brand)
         brand_row.addStretch()
 
-        title = GradientLabel("Pinoy\nVideoke", 132, QFont.Weight.Black, (COL_PINK, COL_GOLD))
+        title = GradientLabel("KaraOkePi", 132, QFont.Weight.Black, (COL_PINK, COL_GOLD))
         self.eq = EqualizerWidget(22)
 
         headline = QLabel("Plug in your karaoke USB drive\nto start singing")
@@ -2431,7 +2489,7 @@ class KaraokeApp(QWidget):
         port = self.config.get("REMOTE_PORT", "8080")
         have_ip = bool(ip) and not ip.startswith("127.")
         if ap:
-            ssid = self.net_ssid or self.config.get("HOTSPOT_SSID", "KatoyOS-Karaoke")
+            ssid = self.net_ssid or self.config.get("HOTSPOT_SSID", "KaraOkePi")
             pwd = self.config.get("HOTSPOT_PASSWORD", "katoyos123")
             host = ip if have_ip else "10.42.0.1"
             self.remote_title.setText("Connect to Wi-Fi")
@@ -2475,7 +2533,7 @@ class KaraokeApp(QWidget):
         header.setSpacing(S(18))
         badge = QLabel()
         badge.setPixmap(badge_pixmap("mic", S(58)))
-        title = GradientLabel("Pinoy Videoke", 44, QFont.Weight.Black, (COL_PINK, COL_GOLD))
+        title = GradientLabel("KaraOkePi", 44, QFont.Weight.Black, (COL_PINK, COL_GOLD))
         self.count_lbl = QLabel("0 songs")
         self.count_lbl.setProperty("role", "count")
         self.count_lbl.setFont(ui_font(18, QFont.Weight.ExtraBold))
@@ -3443,7 +3501,7 @@ class KaraokeApp(QWidget):
 def main():
     config = load_config()
     app = QApplication(sys.argv)
-    app.setApplicationName("KaraOkePi Pinoy Videoke Player")
+    app.setApplicationName("KaraOkePi")
     apply_theme(app)
 
     player = KaraokeApp(config)

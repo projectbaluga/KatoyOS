@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Generates visual UI previews for KatoyOS documentation:
-  - assets/katoyos-desktop-preview.png (1280x720 LXQt Desktop Preview)
+  - assets/katoyos-desktop-preview.png (1280x720 Windows 11 style LXQt Desktop Preview)
   - assets/katoyos-welcome-preview.png (1000x650 KatoyOS Welcome Wizard Preview)
 """
 import sys
@@ -13,7 +13,6 @@ ASSETS_DIR = ROOT / "assets"
 BRANDING_DIR = ROOT / "stage-katoy/01-branding/files"
 
 def get_font(size=14, bold=False):
-    # Try system fonts, fallback to default PIL font
     try:
         font_names = [
             "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf" if bold else "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
@@ -26,24 +25,40 @@ def get_font(size=14, bold=False):
         pass
     return ImageFont.load_default()
 
-def draw_window_header(draw, x, y, width, height, title, active=True):
-    header_color = (26, 30, 46) if active else (18, 20, 30)
-    border_color = (45, 212, 191) if active else (50, 55, 75)
+def draw_win11_window_header(draw, x, y, width, height, title, active=True):
+    # Katoy-Win11 Openbox flat titlebar: window #202020, border #3a3a3a, text #ffffff
+    header_color = (32, 32, 32) if active else (43, 43, 43)
+    border_color = (58, 58, 58) if active else (43, 43, 43)
 
-    # Top header bar
     draw.rectangle([x, y, x + width, y + height], fill=header_color)
     draw.line([x, y, x + width, y], fill=border_color, width=1)
 
-    # Window controls (close, minimize, maximize)
-    btn_radius = 5
-    cy = y + height // 2
-    draw.ellipse([x + width - 18 - btn_radius, cy - btn_radius, x + width - 18 + btn_radius, cy + btn_radius], fill=(239, 68, 68))
-    draw.ellipse([x + width - 36 - btn_radius, cy - btn_radius, x + width - 36 + btn_radius, cy + btn_radius], fill=(245, 158, 11))
-    draw.ellipse([x + width - 54 - btn_radius, cy - btn_radius, x + width - 54 + btn_radius, cy + btn_radius], fill=(16, 185, 129))
+    # Windows 11 caption buttons (minimize, maximize, close)
+    btn_w = 46
+    bx = x + width - btn_w
+    # Close button (hover red style preview or flat active)
+    draw.rectangle([bx, y, bx + btn_w, y + height], fill=header_color)
+    # Draw 'X' glyph
+    cx, cy = bx + btn_w // 2, y + height // 2
+    d = 4
+    draw.line([cx - d, cy - d, cx + d, cy + d], fill=(255, 255, 255), width=1)
+    draw.line([cx + d, cy - d, cx - d, cy + d], fill=(255, 255, 255), width=1)
 
-    # Title
-    font_title = get_font(13, bold=True)
-    draw.text((x + 15, y + (height - 14) // 2), title, fill=(226, 232, 240), font=font_title)
+    # Maximize button
+    bx -= btn_w
+    draw.rectangle([bx, y, bx + btn_w, y + height], fill=header_color)
+    mx, my = bx + btn_w // 2, y + height // 2
+    draw.rectangle([mx - 5, my - 5, mx + 5, my + 5], outline=(255, 255, 255), width=1)
+
+    # Minimize button
+    bx -= btn_w
+    draw.rectangle([bx, y, bx + btn_w, y + height], fill=header_color)
+    ix, iy = bx + btn_w // 2, y + height // 2
+    draw.line([ix - 5, iy + 4, ix + 5, iy + 4], fill=(255, 255, 255), width=1)
+
+    # Title label
+    font_title = get_font(12)
+    draw.text((x + 16, y + (height - 14) // 2), title, fill=(255, 255, 255), font=font_title)
 
 def create_desktop_preview():
     # Base wallpaper
@@ -54,40 +69,42 @@ def create_desktop_preview():
         bg = Image.new("RGBA", (1280, 720), (10, 12, 26, 255))
 
     draw = ImageDraw.Draw(bg)
-    font_main = get_font(13)
-    font_bold = get_font(13, bold=True)
+    font_bold = get_font(12, bold=True)
     font_small = get_font(11)
 
     # 1. QTerminal Window (Center-left)
-    tx, ty, tw, th = 60, 60, 680, 440
-    # Window background & shadow
-    draw.rectangle([tx+4, ty+4, tx+tw+4, ty+th+4], fill=(0, 0, 0, 120))
-    draw.rectangle([tx, ty, tx+tw, ty+th], fill=(14, 17, 23, 245), outline=(45, 212, 191), width=1)
-    draw_window_header(draw, tx, ty, tw, 30, "qterminal - katoy@katoyos: ~", active=True)
+    tx, ty, tw, th = 60, 50, 700, 460
+    # Shadow
+    draw.rectangle([tx+3, ty+3, tx+tw+3, ty+th+3], fill=(0, 0, 0, 140))
+    # Window background & border
+    draw.rectangle([tx, ty, tx+tw, ty+th], fill=(32, 32, 32), outline=(58, 58, 58), width=1)
+    draw_win11_window_header(draw, tx, ty, tw, 32, "qterminal - katoy@katoyos: ~", active=True)
 
-    # Terminal text content
-    term_y = ty + 40
-    term_x = tx + 15
+    # Terminal interior (dark background #1a1a1a)
+    draw.rectangle([tx + 1, ty + 33, tx + tw - 1, ty + th - 1], fill=(26, 26, 26))
+
+    term_y = ty + 44
+    term_x = tx + 18
     term_font = get_font(12)
 
     lines = [
-        ("katoy@katoyos", (45, 212, 191), ":", (255, 255, 255), "~$", (124, 58, 237), " neofetch", (226, 232, 240)),
-        ("       .---.         ", (45, 212, 191), "OS: ", (124, 58, 237), "KatoyOS 1.0 (Debian 13 trixie armhf)", (226, 232, 240)),
-        ("      /  .  \\        ", (45, 212, 191), "Host: ", (124, 58, 237), "Raspberry Pi 3 Model B Rev 1.2", (226, 232, 240)),
-        ("     |  (o)  |       ", (45, 212, 191), "Kernel: ", (124, 58, 237), "linux-image-6.18.50+rpt-rpi-v7", (226, 232, 240)),
-        ("      \\  '  /        ", (45, 212, 191), "Uptime: ", (124, 58, 237), "12 mins", (226, 232, 240)),
-        ("       '---'         ", (45, 212, 191), "Packages: ", (124, 58, 237), "1142 (dpkg)", (226, 232, 240)),
-        ("                     ", (45, 212, 191), "Shell: ", (124, 58, 237), "bash 5.2.37", (226, 232, 240)),
-        ("                     ", (45, 212, 191), "Desktop: ", (124, 58, 237), "LXQt 2.1.0 on Openbox (X11)", (226, 232, 240)),
-        ("                     ", (45, 212, 191), "Terminal: ", (124, 58, 237), "qterminal", (226, 232, 240)),
-        ("                     ", (45, 212, 191), "CPU: ", (124, 58, 237), "ARMv7 Processor rev 4 (v7l) x 4", (226, 232, 240)),
-        ("                     ", (45, 212, 191), "Memory: ", (124, 58, 237), "312 MB / 920 MB (Idle RAM)", (16, 185, 129)),
+        ("katoy@katoyos", (96, 205, 255), ":", (255, 255, 255), "~$", (180, 160, 255), " neofetch", (255, 255, 255)),
+        ("       .---.         ", (96, 205, 255), "OS: ", (180, 160, 255), "KatoyOS 1.0 (Debian 13 trixie armhf)", (255, 255, 255)),
+        ("      /  .  \\        ", (96, 205, 255), "Host: ", (180, 160, 255), "Raspberry Pi 3 Model B Rev 1.2", (255, 255, 255)),
+        ("     |  (o)  |       ", (96, 205, 255), "Kernel: ", (180, 160, 255), "linux-image-6.18.50+rpt-rpi-v7", (255, 255, 255)),
+        ("      \\  '  /        ", (96, 205, 255), "Uptime: ", (180, 160, 255), "18 mins", (255, 255, 255)),
+        ("       '---'         ", (96, 205, 255), "Packages: ", (180, 160, 255), "1142 (dpkg)", (255, 255, 255)),
+        ("                     ", (96, 205, 255), "Shell: ", (180, 160, 255), "bash 5.2.37", (255, 255, 255)),
+        ("                     ", (96, 205, 255), "Desktop: ", (180, 160, 255), "LXQt on Openbox (Katoy-Win11 Dark)", (255, 255, 255)),
+        ("                     ", (96, 205, 255), "Terminal: ", (180, 160, 255), "qterminal", (255, 255, 255)),
+        ("                     ", (96, 205, 255), "CPU: ", (180, 160, 255), "ARMv7 Processor rev 4 (v7l) x 4", (255, 255, 255)),
+        ("                     ", (96, 205, 255), "Memory: ", (180, 160, 255), "312 MB / 920 MB (Idle RAM)", (96, 205, 255)),
         ("", (0,0,0)),
-        ("katoy@katoyos", (45, 212, 191), ":", (255, 255, 255), "~$", (124, 58, 237), " free -h", (226, 232, 240)),
-        ("               total        used        free      shared  buff/cache   available", (148, 163, 184)),
-        ("Mem:           920Mi       312Mi       410Mi        12Mi       198Mi       580Mi", (226, 232, 240)),
-        ("Swap (zram):   512Mi          0B       512Mi", (16, 185, 129)),
-        ("katoy@katoyos", (45, 212, 191), ":", (255, 255, 255), "~$", (124, 58, 237), " █", (45, 212, 191)),
+        ("katoy@katoyos", (96, 205, 255), ":", (255, 255, 255), "~$", (180, 160, 255), " free -h", (255, 255, 255)),
+        ("               total        used        free      shared  buff/cache   available", (160, 160, 160)),
+        ("Mem:           920Mi       312Mi       410Mi        12Mi       198Mi       580Mi", (255, 255, 255)),
+        ("Swap (zram):   512Mi          0B       512Mi", (96, 205, 255)),
+        ("katoy@katoyos", (96, 205, 255), ":", (255, 255, 255), "~$", (180, 160, 255), " █", (96, 205, 255)),
     ]
 
     for row in lines:
@@ -99,125 +116,122 @@ def create_desktop_preview():
             curr_x += (bbox[2] - bbox[0])
         term_y += 20
 
-    # 2. Desktop Notification (Top Right)
-    nx, ny, nw, nh = 900, 50, 350, 90
-    draw.rectangle([nx, ny, nx+nw, ny+nh], fill=(22, 26, 42, 240), outline=(245, 158, 11), width=1)
-    draw.rectangle([nx, ny, nx+5, ny+nh], fill=(245, 158, 11))
-    draw.text((nx + 18, ny + 12), "⚡ KatoyOS PowerWatch", fill=(245, 158, 11), font=font_bold)
-    draw.text((nx + 18, ny + 34), "Under-voltage detected (bit 0x1)", fill=(226, 232, 240), font=font_bold)
-    draw.text((nx + 18, ny + 54), "Use a quality 5V 2.5A power supply & short cable.", fill=(148, 163, 184), font=font_small)
+    # 2. Desktop Notification (Top Right toast matching lxqt-notificationd.qss: #2c2c2c, border 1px #3a3a3a, radius 8px)
+    nx, ny, nw, nh = 890, 50, 360, 92
+    draw.rounded_rectangle([nx, ny, nx+nw, ny+nh], fill=(44, 44, 44, 250), outline=(58, 58, 58), width=1, radius=8)
+    draw.text((nx + 18, ny + 14), "⚡ KatoyOS PowerWatch", fill=(96, 205, 255), font=font_bold)
+    draw.text((nx + 18, ny + 36), "Under-voltage detected (bit 0x1)", fill=(255, 255, 255), font=font_bold)
+    draw.text((nx + 18, ny + 58), "Use a quality 5V 2.5A power supply & short cable.", fill=(157, 157, 157), font=font_small)
 
-    # 3. Bottom Panel (40px high)
-    py = 720 - 40
-    draw.rectangle([0, py, 1280, 720], fill=(10, 12, 26, 245))
-    draw.line([0, py, 1280, py], fill=(45, 212, 191), width=1)
+    # 3. Windows 11 Taskbar (48px high, #202020, border-top 1px #2f2f2f)
+    py = 720 - 48
+    draw.rectangle([0, py, 1280, 720], fill=(32, 32, 32))
+    draw.line([0, py, 1280, py], fill=(47, 47, 47), width=1)
 
-    # Menu icon
+    # Start button (KatoyOS logo icon)
     icon_64_path = BRANDING_DIR / "katoyos-64.png"
     if icon_64_path.exists():
         menu_icon = Image.open(icon_64_path).convert("RGBA").resize((28, 28), Image.Resampling.LANCZOS)
-        bg.paste(menu_icon, (8, py + 6), menu_icon)
+        bg.paste(menu_icon, (10, py + 10), menu_icon)
     else:
-        draw.rectangle([8, py+6, 36, py+34], fill=(45, 212, 191))
+        draw.rounded_rectangle([10, py+8, 44, py+40], fill=(46, 46, 46), radius=4)
 
-    # Quicklaunch separators and launchers
-    draw.line([44, py + 8, 44, py + 32], fill=(40, 45, 65))
+    # Pinned apps (quicklaunch: pcmanfm-qt, katoy-browser, qterminal)
+    draw.rounded_rectangle([52, py + 6, 88, py + 42], fill=(32, 32, 32), radius=4)
+    draw.text((64, py + 14), "📁", font=font_small)
 
-    # Taskbar items
-    draw.rectangle([150, py + 4, 340, py + 36], fill=(26, 30, 46), outline=(45, 212, 191), width=1)
-    draw.text((165, py + 12), "💻 qterminal - katoy@katoyos", fill=(226, 232, 240), font=font_small)
+    draw.rounded_rectangle([92, py + 6, 128, py + 42], fill=(32, 32, 32), radius=4)
+    draw.text((104, py + 14), "🌐", font=font_small)
 
-    draw.rectangle([348, py + 4, 538, py + 36], fill=(18, 20, 32))
-    draw.text((363, py + 12), "🚀 Welcome to KatoyOS", fill=(148, 163, 184), font=font_small)
+    # Running app on taskbar with accent underline (#60cdff, 3px solid)
+    draw.rounded_rectangle([134, py + 6, 178, py + 42], fill=(48, 48, 48), radius=4)
+    draw.line([140, py + 41, 172, py + 41], fill=(96, 205, 255), width=3)
+    draw.text((149, py + 14), "💻", font=font_small)
 
-    # Tray items (Right aligned)
-    draw.text((1120, py + 12), "📶 Wi-Fi: Connected", fill=(45, 212, 191), font=font_small)
-    draw.text((1215, py + 12), "🔊 100%", fill=(226, 232, 240), font=font_small)
-    draw.text((1260, py + 12), "", fill=(226, 232, 240), font=font_small)
+    # Status Notifier & Tray (Right aligned)
+    # Clock format: custom "h:mm AP<br/>dd/MM/yyyy"
+    clock_x = 1180
+    draw.rounded_rectangle([clock_x - 6, py + 4, 1264, py + 44], fill=(32, 32, 32), radius=4)
+    draw.text((clock_x, py + 8), "10:24 AM", fill=(255, 255, 255), font=font_small)
+    draw.text((clock_x, py + 24), "01/11/2026", fill=(200, 200, 200), font=get_font(10))
+
+    # Tray icons (volume, network)
+    draw.text((1115, py + 16), "📶", font=font_small)
+    draw.text((1145, py + 16), "🔊", font=font_small)
+
+    # Show desktop thin slice at the right end
+    draw.line([1272, py + 6, 1272, py + 42], fill=(47, 47, 47), width=1)
 
     bg.save(ASSETS_DIR / "katoyos-desktop-preview.png", "PNG")
     print("Generated katoyos-desktop-preview.png")
 
 def create_welcome_preview():
     # Base background (Dark canvas)
-    bg = Image.new("RGBA", (1000, 650), (10, 12, 26, 255))
+    bg = Image.new("RGBA", (1000, 650), (16, 19, 32, 255))
     draw = ImageDraw.Draw(bg)
 
-    font_title = get_font(16, bold=True)
-    font_main = get_font(13)
+    font_title = get_font(22, bold=True)
+    font_body = get_font(13)
     font_bold = get_font(13, bold=True)
     font_small = get_font(11)
 
-    # Main Wizard Dialog Window
-    wx, wy, ww, wh = 100, 50, 800, 550
-    draw.rectangle([wx, wy, wx+ww, wy+wh], fill=(22, 26, 42, 255), outline=(45, 212, 191), width=1)
-    draw_window_header(draw, wx, wy, ww, 36, "Welcome to KatoyOS Setup Wizard", active=True)
+    # Wizard window: 660x480, #202020 background, flat Openbox header
+    wx, wy, ww, wh = 170, 85, 660, 480
+    # Shadow
+    draw.rectangle([wx+4, wy+4, wx+ww+4, wy+wh+4], fill=(0, 0, 0, 160))
+    # Dialog frame
+    draw.rectangle([wx, wy, wx+ww, wy+wh], fill=(32, 32, 32), outline=(58, 58, 58), width=1)
+    draw_win11_window_header(draw, wx, wy, ww, 32, "Welcome to KatoyOS", active=True)
 
-    # Left Sidebar
-    sb_w = 210
-    draw.rectangle([wx, wy+36, wx+sb_w, wy+wh-50], fill=(16, 19, 32))
-    draw.line([wx+sb_w, wy+36, wx+sb_w, wy+wh-50], fill=(40, 45, 65))
-
-    steps = [
-        ("1. Welcome", False),
-        ("2. Network", False),
-        ("3. Region & Keyboard", True),  # Active
-        ("4. Password", False),
-        ("5. Finish", False)
-    ]
-
-    sy = wy + 60
-    for step_text, is_active in steps:
-        if is_active:
-            draw.rounded_rectangle([wx + 10, sy - 4, wx + sb_w - 10, sy + 24], fill=(124, 58, 237), radius=4)
-            draw.text((wx + 25, sy + 2), step_text, fill=(255, 255, 255), font=font_bold)
-        else:
-            draw.text((wx + 25, sy + 2), step_text, fill=(148, 163, 184), font=font_main)
-        sy += 45
+    # Top thin progress bar: QProgressBar 4px height, chunk #60cdff
+    p_val = 2  # Step 3 of 5 (Region & Keyboard)
+    p_max = 4
+    p_w = int(ww * (p_val / p_max))
+    draw.rectangle([wx, wy + 32, wx + ww, wy + 36], fill=(58, 58, 58))
+    draw.rectangle([wx, wy + 32, wx + p_w, wy + 36], fill=(96, 205, 255))
 
     # Content Area
-    cx = wx + sb_w + 30
+    cx = wx + 40
     cy = wy + 60
 
-    draw.text((cx, cy), "Region & Keyboard Settings", fill=(45, 212, 191), font=font_title)
-    draw.text((cx, cy + 28), "Configure your time zone, Wi-Fi country code, and keyboard layout.", fill=(148, 163, 184), font=font_main)
+    draw.text((cx, cy), "Region & Keyboard", fill=(255, 255, 255), font=font_title)
+    draw.text((cx, cy + 38), "Configure your timezone, Wi-Fi regulatory country, and keyboard layout.", fill=(197, 197, 197), font=font_body)
 
     # Form Fields
-    fy = cy + 70
+    fy = cy + 80
+    field_w = 420
 
     # Timezone
-    draw.text((cx, fy), "Time Zone:", fill=(226, 232, 240), font=font_bold)
-    draw.rounded_rectangle([cx, fy + 22, cx + 480, fy + 58], fill=(14, 17, 26), outline=(60, 66, 90), radius=4)
-    draw.text((cx + 15, fy + 31), "UTC (Coordinated Universal Time)", fill=(226, 232, 240), font=font_main)
-    draw.polygon([(cx + 460, fy + 36), (cx + 470, fy + 36), (cx + 465, fy + 44)], fill=(148, 163, 184))
+    draw.text((cx, fy), "Timezone", fill=(255, 255, 255), font=font_bold)
+    draw.rounded_rectangle([cx, fy + 22, cx + field_w, fy + 56], fill=(45, 45, 45), outline=(58, 58, 58), radius=4)
+    draw.line([cx, fy + 56, cx + field_w, fy + 56], fill=(154, 154, 154), width=1)
+    draw.text((cx + 12, fy + 30), "Asia/Manila (PHT, +0800)", fill=(255, 255, 255), font=font_body)
+    draw.polygon([(cx + field_w - 20, fy + 36), (cx + field_w - 10, fy + 36), (cx + field_w - 15, fy + 44)], fill=(255, 255, 255))
 
     # Wi-Fi Country
-    fy += 80
-    draw.text((cx, fy), "Wi-Fi Country Code (Regulatory):", fill=(226, 232, 240), font=font_bold)
-    draw.rounded_rectangle([cx, fy + 22, cx + 480, fy + 58], fill=(14, 17, 26), outline=(60, 66, 90), radius=4)
-    draw.text((cx + 15, fy + 31), "US - United States", fill=(226, 232, 240), font=font_main)
-    draw.polygon([(cx + 460, fy + 36), (cx + 470, fy + 36), (cx + 465, fy + 44)], fill=(148, 163, 184))
+    fy += 72
+    draw.text((cx, fy), "Wi-Fi Country (Regulatory)", fill=(255, 255, 255), font=font_bold)
+    draw.rounded_rectangle([cx, fy + 22, cx + field_w, fy + 56], fill=(45, 45, 45), outline=(58, 58, 58), radius=4)
+    draw.line([cx, fy + 56, cx + field_w, fy + 56], fill=(154, 154, 154), width=1)
+    draw.text((cx + 12, fy + 30), "Philippines (PH)", fill=(255, 255, 255), font=font_body)
+    draw.polygon([(cx + field_w - 20, fy + 36), (cx + field_w - 10, fy + 36), (cx + field_w - 15, fy + 44)], fill=(255, 255, 255))
 
     # Keyboard Layout
-    fy += 80
-    draw.text((cx, fy), "Keyboard Layout:", fill=(226, 232, 240), font=font_bold)
-    draw.rounded_rectangle([cx, fy + 22, cx + 480, fy + 58], fill=(14, 17, 26), outline=(60, 66, 90), radius=4)
-    draw.text((cx + 15, fy + 31), "English (US)", fill=(226, 232, 240), font=font_main)
-    draw.polygon([(cx + 460, fy + 36), (cx + 470, fy + 36), (cx + 465, fy + 44)], fill=(148, 163, 184))
+    fy += 72
+    draw.text((cx, fy), "Keyboard Layout", fill=(255, 255, 255), font=font_bold)
+    draw.rounded_rectangle([cx, fy + 22, cx + field_w, fy + 56], fill=(45, 45, 45), outline=(58, 58, 58), radius=4)
+    draw.line([cx, fy + 56, cx + field_w, fy + 56], fill=(154, 154, 154), width=1)
+    draw.text((cx + 12, fy + 30), "English (US)", fill=(255, 255, 255), font=font_body)
+    draw.polygon([(cx + field_w - 20, fy + 36), (cx + field_w - 10, fy + 36), (cx + field_w - 15, fy + 44)], fill=(255, 255, 255))
 
-    # Bottom Button Bar
-    by = wy + wh - 50
-    draw.line([wx, by, wx + ww, by], fill=(40, 45, 65))
+    # Navigation buttons: Back, Next (#accent: background #60cdff, text #000000)
+    by = wy + wh - 58
+    draw.rounded_rectangle([cx, by, cx + 90, by + 34], fill=(45, 45, 45), outline=(58, 58, 58), radius=4)
+    draw.text((cx + 26, by + 8), "Back", fill=(255, 255, 255), font=font_bold)
 
-    # Buttons
-    draw.rounded_rectangle([wx + 20, by + 10, wx + 180, by + 40], fill=(22, 26, 42), outline=(60, 66, 90), radius=4)
-    draw.text((wx + 35, by + 18), "☐ Don't show again", fill=(148, 163, 184), font=font_small)
-
-    draw.rounded_rectangle([wx + ww - 220, by + 10, wx + ww - 120, by + 40], fill=(30, 35, 55), outline=(60, 66, 90), radius=4)
-    draw.text((wx + ww - 192, by + 18), "< Back", fill=(226, 232, 240), font=font_main)
-
-    draw.rounded_rectangle([wx + ww - 110, by + 10, wx + ww - 20, by + 40], fill=(45, 212, 191), radius=4)
-    draw.text((wx + ww - 80, by + 18), "Next >", fill=(10, 12, 26), font=font_bold)
+    next_x = wx + ww - 40 - 90
+    draw.rounded_rectangle([next_x, by, next_x + 90, by + 34], fill=(96, 205, 255), radius=4)
+    draw.text((next_x + 28, by + 8), "Next", fill=(0, 0, 0), font=font_bold)
 
     bg.save(ASSETS_DIR / "katoyos-welcome-preview.png", "PNG")
     print("Generated katoyos-welcome-preview.png")

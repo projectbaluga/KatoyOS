@@ -157,7 +157,7 @@ echo 'debconf debconf/priority select critical' | debconf-set-selections
 # 2) mask (not just disable) everything that can start apt/dpkg by itself.
 systemctl mask apt-daily.service apt-daily-upgrade.service apt-daily.timer apt-daily-upgrade.timer \
 	apt-listchanges.service apt-listchanges.timer packagekit.service packagekit-offline-update.service \
-	man-db.timer >/dev/null 2>&1 || true
+	man-db.timer userconfig.service rpi-user-configure.service >/dev/null 2>&1 || true
 mkdir -p /etc/apt/apt.conf.d
 cat > /etc/apt/apt.conf.d/20auto-upgrades <<'EOF'
 APT::Periodic::Update-Package-Lists "0";

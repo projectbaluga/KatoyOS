@@ -16,7 +16,7 @@ if grep -q "overlay" /proc/mounts; then
     case "$opt" in
         1)
             echo "Switching to Maintenance Mode..."
-            sudo raspi-config nonint do_overlayfs 1
+            sudo env DEBIAN_FRONTEND=noninteractive raspi-config nonint do_overlayfs 1
             echo "OverlayFS disabled. System will now reboot into Maintenance Mode."
             read -rp "Press Enter to reboot now..."
             sudo reboot
@@ -33,7 +33,7 @@ if grep -q "overlay" /proc/mounts; then
 fi
 
 echo "Updating KatoyOS packages..."
-sudo apt update && sudo env DEBIAN_FRONTEND=noninteractive apt full-upgrade -y
+sudo env DEBIAN_FRONTEND=noninteractive apt update && sudo env DEBIAN_FRONTEND=noninteractive apt full-upgrade -y
 echo
 echo "Done. Restart if the kernel or system packages were updated."
 read -rp "Press Enter to close."

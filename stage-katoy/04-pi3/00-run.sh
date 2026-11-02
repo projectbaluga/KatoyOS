@@ -147,6 +147,8 @@ fi
 on_chroot << 'CHEOF'
 export DEBIAN_FRONTEND=noninteractive
 apt-get purge -y unattended-upgrades || true
+# The appliance uses the fixed katoy account; remove Raspberry Pi's first-boot user setup prompt.
+apt-get purge -y userconf-pi || true
 
 # Nothing on this appliance may ever show the blue "Package configuration" screen.
 # 1) debconf: never use a dialog frontend, never ask below "critical" priority.

@@ -136,15 +136,25 @@ def test_captive_portal_redirection_and_hotspot_routing():
     RemoteRequestHandler = kk["RemoteRequestHandler"]
 
     class MockApp:
-        net_ap = True
-        net_ip = "10.42.0.1"
-        config = {"REMOTE_PORT": "8080"}
+        def __init__(self, is_ap=True):
+            self.net_ap = is_ap
+            self.net_ip = "10.42.0.1"
+            self.config = {"REMOTE_PORT": "8080"}
+            self.db = None
+            self.reservation_queue = []
+            self.is_playing = False
+            self.is_paused = False
+            self.current_song = None
+            self.pitch_key = 0
+            self.tempo_multiplier = 1.0
 
     class DummyHandler(RemoteRequestHandler):
-        def __init__(self, path, headers=None):
+        def __init__(self, path, headers=None, is_ap=True, client_addr=("10.42.0.42", 54321), pin=""):
             self.path = path
             self.headers = headers or {}
-            self.app_instance = MockApp()
+            self.client_address = client_addr
+            self.app_instance = MockApp(is_ap)
+            self.pin = pin
             self.responses = []
             self.header_list = {}
             self.wfile = io.BytesIO()
@@ -166,12 +176,50 @@ def test_captive_portal_redirection_and_hotspot_routing():
     assert 302 in h.responses
     assert h.header_list.get("Location") == "http://10.42.0.1:8080/"
 
+    # Test iOS probe redirect
+    h_ios = DummyHandler("/hotspot-detect.html", {"Host": "captive.apple.com"})
+    assert 302 in h_ios.responses
+    assert h_ios.header_list.get("Location") == "http://10.42.0.1:8080/"
+
     # Test unknown path redirect during hotspot mode
     h_unknown = DummyHandler("/some/random/url", {"Host": "example.com"})
     assert 302 in h_unknown.responses
     assert h_unknown.header_list.get("Location") == "http://10.42.0.1:8080/"
 
-    # Test root during hotspot mode serves wifi setup page (200)
+    # Test unknown path when hotspot is inactive returns 404
+    h_unknown_no_ap = DummyHandler("/some/random/url", {"Host": "example.com"}, is_ap=False)
+    assert 404 in h_unknown_no_ap.responses
+
+    # Test root during hotspot mode serves REMOTE_HTML (full remote UI with Wi-Fi link)
     h_root = DummyHandler("/")
     assert 200 in h_root.responses
-    assert b"KaraOkePi Wi-Fi Setup" in h_root.wfile.getvalue()
+    assert b"KaraOkePi Remote" in h_root.wfile.getvalue()
+    assert b"/wifi" in h_root.wfile.getvalue()
+
+    # Test Wi-Fi setup page has link back to remote
+    h_wifi = DummyHandler("/wifi")
+    assert 200 in h_wifi.responses
+    assert b"KaraOkePi Wi-Fi Setup" in h_wifi.wfile.getvalue()
+    assert b"Remote" in h_wifi.wfile.getvalue()
+
+    # Test /api/* reachable on AP interface even if REMOTE_PIN is set
+    h_api = DummyHandler("/api/state", client_addr=("10.42.0.5", 1234), pin="9999")
+    assert 200 in h_api.responses
+    assert b"playing" in h_api.wfile.getvalue()
+
+    # Test non-AP client without PIN is blocked when REMOTE_PIN is set
+    h_api_blocked = DummyHandler("/api/state", client_addr=("192.168.1.50", 1234), pin="9999", is_ap=False)
+    assert 401 in h_api_blocked.responses
+
+
+def test_hotspot_mode_behavior_and_watcher():
+    NetworkWatcher = kk["NetworkWatcher"]
+
+    cfg_always = {"HOTSPOT_MODE": "always", "HOTSPOT_SSID": "TestAP", "HOTSPOT_GRACE": "10"}
+    w_always = NetworkWatcher(cfg_always)
+    assert w_always.mode == "always"
+
+    cfg_fallback = {"HOTSPOT_MODE": "fallback", "HOTSPOT_SSID": "TestAP", "HOTSPOT_GRACE": "30"}
+    w_fallback = NetworkWatcher(cfg_fallback)
+    assert w_fallback.mode == "fallback"
+    assert w_fallback.grace == 30.0

@@ -408,21 +408,45 @@ def parse_nmcli_general_state(output_str):
 
 
 def check_and_trigger_wifi_hotspot(config):
-    """Checks NetworkManager connection state and launches AP setup hotspot if disconnected."""
+    """Brings up the KaraOkePi Wi-Fi AP profile, creating a persistent connection profile if needed."""
     if not shutil.which("nmcli"):
         return False, ""
     try:
-        res = subprocess.run(["nmcli", "-t", "-g", "STATE", "general"], capture_output=True, text=True)
-        state = parse_nmcli_general_state(res.stdout)
-        if state in ("disconnected", "unknown"):
-            ssid = config.get("HOTSPOT_SSID", "KaraOkePi")
-            password = config.get("HOTSPOT_PASSWORD", "katoyos123")
-            ifname = config.get("HOTSPOT_IFNAME", "wlan0")
+        ssid = config.get("HOTSPOT_SSID", "KaraOkePi")
+        password = config.get("HOTSPOT_PASSWORD", "katoyos123")
+        ifname = config.get("HOTSPOT_IFNAME", "wlan0")
+        con_name = "KaraOkePi-AP"
+
+        # Check existing profiles
+        show_res = subprocess.run(["nmcli", "-t", "-f", "NAME", "connection", "show"],
+                                  capture_output=True, text=True, timeout=5)
+        existing_profiles = [ln.strip() for ln in show_res.stdout.splitlines()]
+
+        if con_name not in existing_profiles:
+            # Create persistent shared AP profile
             subprocess.run(
-                ["nmcli", "device", "wifi", "hotspot", "ifname", ifname, "ssid", ssid, "password", password],
-                stderr=subprocess.DEVNULL
+                [
+                    "nmcli", "connection", "add",
+                    "type", "wifi",
+                    "ifname", ifname,
+                    "con-name", con_name,
+                    "autoconnect", "yes",
+                    "ssid", ssid,
+                    "mode", "ap",
+                    "band", "bg",
+                    "channel", "6",
+                    "ipv4.method", "shared",
+                    "ipv4.addresses", "10.42.0.1/24",
+                    "wifi-sec.key-mgmt", "wpa-psk",
+                    "wifi-sec.psk", password,
+                ],
+                capture_output=True, text=True, timeout=10
             )
-            return True, ssid
+
+        # Bring up profile
+        subprocess.run(["nmcli", "connection", "up", con_name],
+                       capture_output=True, text=True, timeout=10)
+        return True, ssid
     except Exception as e:
         print(f"Hotspot setup error: {e}")
     return False, ""
@@ -446,13 +470,14 @@ def get_nm_state():
 
 
 def is_hotspot_active():
-    """True while NetworkManager's setup hotspot (connection name 'Hotspot') is up."""
+    """True while NetworkManager's AP hotspot (KaraOkePi-AP, KaraokePi-AP, or Hotspot) is active."""
     if not shutil.which("nmcli"):
         return False
     try:
         res = subprocess.run(["nmcli", "-t", "-f", "NAME", "connection", "show", "--active"],
                              capture_output=True, text=True, timeout=5)
-        return "Hotspot" in [ln.strip() for ln in res.stdout.splitlines()]
+        active_names = {ln.strip() for ln in res.stdout.splitlines()}
+        return bool({"KaraOkePi-AP", "KaraokePi-AP", "Hotspot"} & active_names)
     except Exception:
         return False
 
@@ -460,9 +485,10 @@ def is_hotspot_active():
 class NetworkWatcher(QThread):
     """Tracks IP / hotspot state off the UI thread.
 
-    The karaoke app now starts very early in boot, so the Wi-Fi is usually not up yet. We therefore only
-    raise the setup hotspot after the network has been *continuously* down for `HOTSPOT_GRACE` seconds,
-    and we keep refreshing the IP so the idle-screen QR code is never stale.
+    In HOTSPOT_MODE=always (default), the KaraOkePi AP is raised on boot and permanently broadcasts
+    the control network so phones can connect immediately.
+    In HOTSPOT_MODE=fallback, the AP is only raised if the network has been continuously down for HOTSPOT_GRACE seconds.
+    The watcher keeps refreshing IP and AP state so the idle-screen QR is never stale.
     """
 
     changed = pyqtSignal(str, bool, str)  # ip, hotspot_active, hotspot_ssid
@@ -470,6 +496,7 @@ class NetworkWatcher(QThread):
     def __init__(self, config, poll_sec=3.0):
         super().__init__()
         self.config = config
+        self.mode = config.get("HOTSPOT_MODE", "always").lower()
         try:
             self.grace = float(config.get("HOTSPOT_GRACE", "45") or 45)
         except ValueError:
@@ -490,20 +517,44 @@ class NetworkWatcher(QThread):
         offline_since = None
         last_attempt = -1e9
         last = None
+
+        if self.mode == "always":
+            # Give NetworkManager a short moment to finish initial startup
+            self._sleep(2.0)
+            if not self._stop_flag:
+                check_and_trigger_wifi_hotspot(self.config)
+
         while not self._stop_flag:
             state = get_nm_state()
             ap = is_hotspot_active() if state != "absent" else False
             now = time.monotonic()
-            if ap or state not in ("disconnected", "unknown"):
-                offline_since = None
-            else:
-                if offline_since is None:
-                    offline_since = now
-                if now - offline_since >= self.grace and now - last_attempt > 60:
+
+            if self.mode == "always":
+                # Ensure AP remains active in always-on mode
+                if not ap and now - last_attempt > 15:
                     last_attempt = now
                     check_and_trigger_wifi_hotspot(self.config)
                     ap = is_hotspot_active()
-            info = (get_local_ip(), ap, ssid if ap else "")
+            else:
+                # Fallback mode: AP only when offline past grace period
+                if ap or state not in ("disconnected", "unknown"):
+                    offline_since = None
+                else:
+                    if offline_since is None:
+                        offline_since = now
+                    if now - offline_since >= self.grace and now - last_attempt > 60:
+                        last_attempt = now
+                        check_and_trigger_wifi_hotspot(self.config)
+                        ap = is_hotspot_active()
+
+            # When AP is active, AP clients connect to 10.42.0.1;
+            # get_local_ip() will return either 10.42.0.1 or the local LAN/STA IP.
+            # If AP is active and IP returned is 127.0.0.1, fall back to 10.42.0.1.
+            ip = get_local_ip()
+            if ap and (not ip or ip.startswith("127.")):
+                ip = "10.42.0.1"
+
+            info = (ip, ap, ssid if ap else "")
             if info != last:
                 last = info
                 self.changed.emit(*info)
@@ -612,9 +663,12 @@ body{margin:0;min-height:100vh;color:#f5f3ff;font-family:Inter,system-ui,-apple-
  background:radial-gradient(700px 420px at 0% 0%,rgba(255,46,147,.30),transparent 62%),radial-gradient(700px 460px at 100% 100%,rgba(34,211,238,.22),transparent 60%),linear-gradient(#0a061f,#1c0f4a);
  background-attachment:fixed;padding:calc(16px + env(safe-area-inset-top)) 16px 48px}
 .wrap{max-width:560px;margin:0 auto}
-header{display:flex;align-items:center;gap:12px;margin-bottom:16px}
+header{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:16px}
+.brand{display:flex;align-items:center;gap:12px}
 .logo{width:44px;height:44px;border-radius:14px;background:linear-gradient(135deg,var(--pink),var(--violet));display:grid;place-items:center;font-size:22px}
 h1{margin:0;font-size:24px;font-weight:900;background:linear-gradient(90deg,var(--pink),var(--gold));-webkit-background-clip:text;background-clip:text;color:transparent}
+.nav-link{display:inline-flex;align-items:center;gap:6px;font-size:14px;font-weight:800;color:var(--text);text-decoration:none;background:rgba(255,255,255,.1);border:1px solid rgba(255,255,255,.16);padding:8px 14px;border-radius:999px;transition:background .2s}
+.nav-link:hover{background:rgba(255,255,255,.18);border-color:var(--cyan)}
 .card{background:rgba(255,255,255,.07);border:1px solid rgba(255,255,255,.13);border-radius:22px;padding:16px;margin-bottom:14px;backdrop-filter:blur(8px)}
 .np .lbl{font-size:12px;letter-spacing:.16em;color:var(--muted);font-weight:800}
 .np .t{font-size:22px;font-weight:900;margin:4px 0 2px;overflow-wrap:anywhere}
@@ -640,7 +694,10 @@ button.m{border:0;color:#052e22;background:linear-gradient(90deg,var(--mint),var
 #toast{position:fixed;left:50%;bottom:calc(24px + env(safe-area-inset-bottom));transform:translateX(-50%);background:rgba(10,6,31,.95);border:1px solid var(--pink);padding:12px 20px;border-radius:999px;font-weight:700;opacity:0;pointer-events:none;transition:opacity .2s;max-width:90vw}
 #toast.on{opacity:1}
 </style></head><body><div class="wrap">
-<header><div class="logo">&#127908;</div><h1>KaraOkePi Remote</h1></header>
+<header>
+ <div class="brand"><div class="logo">&#127908;</div><h1>KaraOkePi Remote</h1></div>
+ <a class="nav-link" id="wifi_link" href="/wifi">&#128246; Wi-Fi</a>
+</header>
 
 <div class="card np"><div class="lbl">NOW SINGING</div>
  <div class="t" id="np_t">Nothing playing</div><div class="a" id="np_a">Reserve a song below</div>
@@ -660,6 +717,7 @@ button.m{border:0;color:#052e22;background:linear-gradient(90deg,var(--mint),var
 <div id="toast"></div></div>
 <script>
 const PIN=new URLSearchParams(location.search).get('pin')||'';
+if(PIN){const wl=document.getElementById('wifi_link');if(wl)wl.href='/wifi?pin='+encodeURIComponent(PIN)}
 const $=s=>document.querySelector(s);
 const esc=s=>String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 async function api(p){const u=p+(PIN?(p.includes('?')?'&':'?')+'pin='+encodeURIComponent(PIN):'');
@@ -719,22 +777,29 @@ __THEME_ROOT_CSS__
 body{margin:0;min-height:100vh;display:grid;place-items:center;padding:20px;color:var(--text);font-family:Inter,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
  background:radial-gradient(700px 420px at 0% 0%,rgba(255,46,147,.30),transparent 62%),radial-gradient(700px 460px at 100% 100%,rgba(34,211,238,.22),transparent 60%),linear-gradient(var(--bg-top),var(--bg-bottom))}
 .card{width:100%;max-width:420px;background:rgba(255,255,255,.07);border:1px solid rgba(255,255,255,.13);border-radius:24px;padding:26px}
-header{display:flex;align-items:center;gap:12px;margin-bottom:14px}
+header{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:14px}
+.brand{display:flex;align-items:center;gap:12px}
 .logo{width:38px;height:38px;border-radius:12px;background:linear-gradient(135deg,var(--pink),var(--violet));display:grid;place-items:center;font-size:19px}
 h2{margin:0;font-size:24px;font-weight:900;background:linear-gradient(90deg,var(--pink),var(--gold));-webkit-background-clip:text;background-clip:text;color:transparent}
+.back-link{font-size:14px;font-weight:800;color:var(--text);text-decoration:none;background:rgba(255,255,255,.1);border:1px solid rgba(255,255,255,.16);padding:8px 14px;border-radius:999px;transition:background .2s}
+.back-link:hover{background:rgba(255,255,255,.18);border-color:var(--cyan)}
 p{color:var(--muted);margin:0 0 18px}label{display:block;font-weight:700;font-size:13px;letter-spacing:.08em;color:var(--muted);margin:14px 0 6px}
 select,input,button{width:100%;font:inherit;font-size:17px;color:#fff;border-radius:16px;padding:14px 16px;border:2px solid rgba(255,255,255,.16);background:rgba(255,255,255,.09);outline:none}
 select option{color:#000}input:focus,select:focus{border-color:var(--cyan)}
 button{margin-top:20px;border:0;font-weight:800;background:linear-gradient(90deg,var(--mint),var(--cyan));color:#052e22;cursor:pointer}
 #msg{margin-top:14px;font-weight:700;min-height:22px}
 </style></head><body><div class="card">
-<header><div class="logo">&#127908;</div><h2>KaraOkePi</h2></header>
+<header>
+ <div class="brand"><div class="logo">&#127908;</div><h2>KaraOkePi</h2></div>
+ <a class="back-link" id="remote_link" href="/">&#127908; Remote</a>
+</header>
 <p>Pick your home network so the karaoke box can go online.</p>
 <label for="ssid">NETWORK</label><select id="ssid">__SSID_OPTIONS__</select>
 <label for="pass">PASSWORD</label><input type="password" id="pass" placeholder="Wi-Fi password" autocomplete="off">
 <button id="go">Connect</button><div id="msg"></div></div>
 <script>
 const PIN=new URLSearchParams(location.search).get('pin')||'';
+if(PIN){const rl=document.getElementById('remote_link');if(rl)rl.href='/?pin='+encodeURIComponent(PIN)}
 document.getElementById('go').addEventListener('click',async()=>{
  const s=document.getElementById('ssid').value,p=document.getElementById('pass').value,m=document.getElementById('msg');
  if(!s){m.textContent='Please pick a network';return}
@@ -829,19 +894,22 @@ class RemoteRequestHandler(BaseHTTPRequestHandler):
                 self.send_redirect(portal_url, 302)
                 return
 
-        # REMOTE_PIN gates the player API. First-time Wi-Fi setup (/wifi, /setup, status polling) stays open
-        # only while the box is in hotspot mode, so a phone that just scanned the QR code can configure it.
+        # REMOTE_PIN gates the player API.
+        # First-time Wi-Fi setup (/wifi, /setup, status polling) stays open while in hotspot mode.
+        # Furthermore, requests originating from the AP subnet (10.42.0.0/24) or local loopback
+        # are exempt from REMOTE_PIN so AP users who just joined the Wi-Fi immediately get full remote
+        # and setup access without needing an unshared PIN.
+        client_ip = self.client_address[0] if hasattr(self, "client_address") and self.client_address else ""
+        is_ap_client = client_ip.startswith("10.42.0.") or client_ip == "127.0.0.1" or (hotspot_active and not client_ip)
+
         setup_paths = ("/wifi", "/setup", "/wifi/status", "/api/wifi-status")
         setup_open = path in setup_paths and hotspot_active
-        if self.pin and not setup_open and params.get("pin", [""])[0] != self.pin:
+        if self.pin and not setup_open and not is_ap_client and params.get("pin", [""])[0] != self.pin:
             self.send_json({"error": "Unauthorized / Invalid PIN"}, 401)
             return
 
         if path == "/":
-            if hotspot_active:
-                self._serve_wifi_setup_page()
-            else:
-                self.send_html(REMOTE_HTML)
+            self.send_html(REMOTE_HTML)
         elif path == "/api/search":
             q = params.get("q", [""])[0]
             offset = 0
@@ -1057,6 +1125,11 @@ def load_config(usb_dir=None):
         "REMOTE_ENABLED": "1",
         "REMOTE_PORT": "8080",
         "REMOTE_PIN": "",
+        "HOTSPOT_MODE": "always",
+        "HOTSPOT_SSID": "KaraOkePi",
+        "HOTSPOT_PASSWORD": "katoyos123",
+        "HOTSPOT_GRACE": "45",
+        "HOTSPOT_IFNAME": "wlan0",
         "SCORING_MODE": "real",
     }
     if CONFIG_FILE.exists():
@@ -2492,13 +2565,13 @@ class KaraokeApp(QWidget):
             ssid = self.net_ssid or self.config.get("HOTSPOT_SSID", "KaraOkePi")
             pwd = self.config.get("HOTSPOT_PASSWORD", "katoyos123")
             host = ip if have_ip else "10.42.0.1"
-            self.remote_title.setText("Connect to Wi-Fi")
-            self.remote_sub.setText("No Wi-Fi yet. Use your phone to give this karaoke box internet access.")
-            self.qr_a.set_qr(wifi_qr_payload(ssid, pwd), "1 · Join hotspot", 230)
+            self.remote_title.setText("Sing from your phone")
+            self.remote_sub.setText(f"Connect your phone to '{ssid}' Wi-Fi, then scan or visit the remote.")
+            self.qr_a.set_qr(wifi_qr_payload(ssid, pwd), "1 · Join Wi-Fi", 230)
             self.qr_a.show()
-            self.qr_b.set_qr(f"http://{host}:{port}/wifi", "2 · Open setup", 230)
-            self.remote_url_lbl.setText(f"http://{host}:{port}/wifi")
-            self.ap_info_lbl.setText(f"Hotspot: {ssid}   ·   Password: {pwd}")
+            self.qr_b.set_qr(f"http://{host}:{port}", "2 · Open remote", 230)
+            self.remote_url_lbl.setText(f"http://{host}:{port}")
+            self.ap_info_lbl.setText(f"Wi-Fi: {ssid}   ·   Password: {pwd}")
             self.ap_info_lbl.show()
         elif have_ip:
             self.remote_title.setText("Sing from your phone")

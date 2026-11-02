@@ -70,8 +70,8 @@ WD
 # Must run before OverlayFS is enabled so /boot/firmware and wpa_supplicant configs persist
 on_chroot << 'CHEOF'
 if command -v raspi-config >/dev/null 2>&1; then
-	raspi-config nonint do_wifi_country PH || true
-	raspi-config nonint do_rfkill 0 || true
+	DEBIAN_FRONTEND=noninteractive raspi-config nonint do_wifi_country PH || true
+	DEBIAN_FRONTEND=noninteractive raspi-config nonint do_rfkill 0 || true
 fi
 if command -v rfkill >/dev/null 2>&1; then
 	rfkill unblock wifi || true
@@ -94,7 +94,7 @@ fi
 if [ "${KATOY_OVERLAYFS:-1}" = "1" ]; then
 on_chroot << 'CHEOF'
 if command -v raspi-config >/dev/null 2>&1; then
-	raspi-config nonint do_overlayfs 0 || true
+	DEBIAN_FRONTEND=noninteractive raspi-config nonint do_overlayfs 0 || true
 fi
 # Mask services that fail or produce cascade errors on read-only OverlayFS root
 systemctl mask systemd-remount-fs.service >/dev/null 2>&1 || true
@@ -157,7 +157,12 @@ echo 'debconf debconf/priority select critical' | debconf-set-selections
 # 2) mask (not just disable) everything that can start apt/dpkg by itself.
 systemctl mask apt-daily.service apt-daily-upgrade.service apt-daily.timer apt-daily-upgrade.timer \
 	apt-listchanges.service apt-listchanges.timer packagekit.service packagekit-offline-update.service \
-	man-db.timer userconfig.service rpi-user-configure.service >/dev/null 2>&1 || true
+	man-db.timer userconfig.service rpi-user-configure.service userconf-pi.service \
+	piwiz.service piwiz.socket rsyslog.service >/dev/null 2>&1 || true
+# Persist the noninteractive frontend for login, SSH, and sudo-launched sessions.
+touch /etc/environment
+grep -qxF 'DEBIAN_FRONTEND=noninteractive' /etc/environment || \
+	echo 'DEBIAN_FRONTEND=noninteractive' >> /etc/environment
 mkdir -p /etc/apt/apt.conf.d
 cat > /etc/apt/apt.conf.d/20auto-upgrades <<'EOF'
 APT::Periodic::Update-Package-Lists "0";
@@ -168,6 +173,14 @@ dpkg --configure -a
 bad=$(dpkg -l | awk 'NR>5 && $1 !~ /^(ii|rc|un)$/ {print $1, $2}')
 if [ -n "$bad" ]; then
 	echo "ERROR: packages not fully configured:"; echo "$bad"; exit 1
+fi
+if dpkg -s userconf-pi >/dev/null 2>&1; then
+	echo "ERROR: userconf-pi is still installed; first-boot user setup can prompt."
+	exit 1
+fi
+if ! debconf-get-selections | awk '$1 == "debconf" && $2 == "debconf/frontend" && $4 == "Noninteractive" { found=1 } END { exit !found }'; then
+	echo "ERROR: debconf frontend is not persistently set to Noninteractive."
+	exit 1
 fi
 apt-get clean
 CHEOF

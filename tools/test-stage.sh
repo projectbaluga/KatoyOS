@@ -172,6 +172,21 @@ grep -q "Dpkg::Options" "$WORK_DIR/etc/apt/apt.conf.d/90katoy-noninteractive" ||
 grep -q "debconf debconf/frontend select Noninteractive" "$REPO_ROOT/stage-katoy/04-pi3/00-run.sh" || { echo "FAIL: debconf frontend not forced noninteractive"; exit 1; }
 grep -q "dpkg --configure -a" "$REPO_ROOT/stage-katoy/04-pi3/00-run.sh" || { echo "FAIL: build does not finish half-configured packages"; exit 1; }
 grep -q "mask apt-daily" "$REPO_ROOT/stage-katoy/04-pi3/00-run.sh" || { echo "FAIL: apt timers not masked"; exit 1; }
+grep -q "apt-get purge -y userconf-pi" "$REPO_ROOT/stage-katoy/04-pi3/00-run.sh" || { echo "FAIL: userconf-pi is not purged"; exit 1; }
+grep -q "userconfig.service rpi-user-configure.service userconf-pi.service" "$REPO_ROOT/stage-katoy/04-pi3/00-run.sh" || { echo "FAIL: first-boot user configuration services are not masked"; exit 1; }
+grep -q "piwiz.service piwiz.socket rsyslog.service" "$REPO_ROOT/stage-katoy/04-pi3/00-run.sh" || { echo "FAIL: piwiz/rsyslog services are not masked"; exit 1; }
+grep -q "DEBIAN_FRONTEND=noninteractive' /etc/environment" "$REPO_ROOT/stage-katoy/04-pi3/00-run.sh" || { echo "FAIL: noninteractive frontend is not persisted in /etc/environment"; exit 1; }
+grep -q "dpkg -s userconf-pi" "$REPO_ROOT/stage-katoy/04-pi3/00-run.sh" || { echo "FAIL: build does not assert userconf-pi is absent"; exit 1; }
+grep -q "debconf-get-selections" "$REPO_ROOT/stage-katoy/04-pi3/00-run.sh" || { echo "FAIL: build does not assert debconf frontend"; exit 1; }
+grep -q "DEBIAN_FRONTEND=noninteractive raspi-config nonint do_overlayfs 1" "$REPO_ROOT/stage-katoy/03-tools/files/katoy-update" || { echo "FAIL: OverlayFS toggle is not noninteractive"; exit 1; }
+! grep -Eq 'sudo[[:space:]]+apt(-get)?[[:space:]]' "$REPO_ROOT/stage-katoy/03-tools/files/katoy-update" || { echo "FAIL: updater contains apt calls without explicit noninteractive environment"; exit 1; }
+grep -q '^export DEBIAN_FRONTEND=noninteractive' "$REPO_ROOT/stage-katoy/03-tools/files/katoy-update" || { echo "FAIL: updater does not export noninteractive frontend"; exit 1; }
+grep -q 'sudo DEBIAN_FRONTEND=noninteractive apt update' "$REPO_ROOT/stage-katoy/03-tools/files/katoy-update" || { echo "FAIL: apt update is not noninteractive"; exit 1; }
+grep -q 'sudo DEBIAN_FRONTEND=noninteractive apt full-upgrade' "$REPO_ROOT/stage-katoy/03-tools/files/katoy-update" || { echo "FAIL: full-upgrade is not noninteractive"; exit 1; }
+grep -q '^export DEBIAN_FRONTEND=noninteractive' "$REPO_ROOT/stage-katoy/03-tools/files/katoy-helper" || { echo "FAIL: helper does not export noninteractive frontend"; exit 1; }
+grep -q 'DEBIAN_FRONTEND=noninteractive chpasswd' "$REPO_ROOT/stage-katoy/03-tools/files/katoy-helper" || { echo "FAIL: helper password update is not explicitly noninteractive"; exit 1; }
+grep -q 'DEBIAN_FRONTEND=noninteractive raspi-config nonint do_overlayfs 0' "$REPO_ROOT/stage-katoy/04-pi3/00-run.sh" || { echo "FAIL: build OverlayFS configuration is not explicitly noninteractive"; exit 1; }
+grep -q 'DEBIAN_FRONTEND=noninteractive raspi-config nonint do_wifi_country' "$REPO_ROOT/stage-katoy/03-tools/files/katoy-helper" || { echo "FAIL: helper raspi-config call is not noninteractive"; exit 1; }
 
 # Song partition expansion must verify its result and must not mark failure as success
 EXP="$REPO_ROOT/stage-katoy/03-tools/files/katoy-expand-data"

@@ -1,18 +1,39 @@
 #!/usr/bin/env python3
 """Simple web browser for KatoyOS with search fallback and basic internet browsing."""
+import os
+import shutil
 import sys
 import urllib.parse
+from pathlib import Path
 
 try:
-    from PyQt6.QtCore import QUrl
+    from PyQt6.QtCore import QSize, QUrl
     from PyQt6.QtGui import QIcon
-    from PyQt6.QtWidgets import QApplication, QHBoxLayout, QLineEdit, QMainWindow, QPushButton, QVBoxLayout, QWidget
+    from PyQt6.QtWidgets import QApplication, QHBoxLayout, QLineEdit, QMainWindow, QToolButton, QVBoxLayout, QWidget
     from PyQt6.QtWebEngineWidgets import QWebEngineView
 except ImportError as exc:  # pragma: no cover - runtime dependency issue
+    # Launched from the menu there is no terminal, so an error message would be
+    # invisible. Hand over to Falkon instead of failing silently.
+    fallback = shutil.which("falkon")
+    if fallback:
+        os.execv(fallback, [fallback, *sys.argv[1:]])
     raise SystemExit(
-        "Katoy Browser requires PyQt6 and PyQt6-WebEngine. "
-        "Install them with: pip install PyQt6 PyQt6-WebEngine"
+        "Katoy Browser needs python3-pyqt6.qtwebengine "
+        "(sudo apt install python3-pyqt6.qtwebengine)."
     ) from exc
+
+
+STYLE = Path("/usr/share/katoyos/win11/katoy-win11.qss")
+HOME = "https://duckduckgo.com/"
+
+
+def tool_button(icon_name, tip):
+    btn = QToolButton()
+    btn.setIcon(QIcon.fromTheme(icon_name))
+    btn.setIconSize(QSize(20, 20))
+    btn.setToolTip(tip)
+    btn.setAutoRaise(True)
+    return btn
 
 
 class BrowserWindow(QMainWindow):
@@ -21,44 +42,39 @@ class BrowserWindow(QMainWindow):
         self.setWindowTitle("Katoy Browser")
         self.resize(1200, 800)
 
-        try:
-            self.setWindowIcon(QIcon.fromTheme("web-browser"))
-        except Exception:
-            pass
+        self.setWindowIcon(QIcon.fromTheme("web-browser"))
+        self.view = QWebEngineView()
 
-        self.back_btn = QPushButton("Back")
-        self.forward_btn = QPushButton("Forward")
-        self.reload_btn = QPushButton("Reload")
-        self.home_btn = QPushButton("Home")
+        self.back_btn = tool_button("go-previous", "Back")
+        self.forward_btn = tool_button("go-next", "Forward")
+        self.reload_btn = tool_button("view-refresh", "Reload")
+        self.home_btn = tool_button("go-home", "Home")
         self.url_bar = QLineEdit()
+        self.url_bar.setPlaceholderText("Search or enter address")
         self.url_bar.returnPressed.connect(self.load_from_bar)
 
         self.back_btn.clicked.connect(self.view.back)
         self.forward_btn.clicked.connect(self.view.forward)
         self.reload_btn.clicked.connect(self.view.reload)
-        self.home_btn.clicked.connect(lambda: self.load("https://duckduckgo.com/"))
+        self.home_btn.clicked.connect(lambda: self.load(HOME))
 
         nav = QHBoxLayout()
-        nav.addWidget(self.back_btn)
-        nav.addWidget(self.forward_btn)
-        nav.addWidget(self.reload_btn)
-        nav.addWidget(self.home_btn)
+        nav.setContentsMargins(8, 6, 8, 6)
+        nav.setSpacing(4)
+        for btn in (self.back_btn, self.forward_btn, self.reload_btn, self.home_btn):
+            nav.addWidget(btn)
         nav.addWidget(self.url_bar, 1)
 
         central = QWidget()
         layout = QVBoxLayout(central)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
         layout.addLayout(nav)
         layout.addWidget(self.view)
         self.setCentralWidget(central)
 
         self.view.urlChanged.connect(self.update_url_bar)
-        self.load("https://duckduckgo.com/")
-
-    @property
-    def view(self):
-        if not hasattr(self, "_view"):
-            self._view = QWebEngineView()
-        return self._view
+        self.load(HOME)
 
     def normalize_url(self, text):
         value = text.strip()
@@ -87,14 +103,13 @@ class BrowserWindow(QMainWindow):
         self.url_bar.setText(url)
 
     def update_url_bar(self, url):
-        try:
-            self.url_bar.setText(url.toString())
-        except Exception:
-            pass
+        self.url_bar.setText(url.toString())
 
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
+    if STYLE.exists():
+        app.setStyleSheet(STYLE.read_text())
     window = BrowserWindow()
     window.show()
     sys.exit(app.exec())

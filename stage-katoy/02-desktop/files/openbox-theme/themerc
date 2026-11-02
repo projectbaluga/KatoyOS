@@ -1,0 +1,88 @@
+! Katoy-Win11: flat Windows 11 dark titlebars for Openbox (no compositor needed)
+! palette: window #202020, border #2f2f2f, accent #60cdff, close hover #c42b1c
+
+border.width: 1
+padding.width: 6
+padding.height: 8
+window.handle.width: 0
+window.client.padding.width: 0
+window.client.padding.height: 0
+menu.overlap: 0
+
+window.active.border.color: #3a3a3a
+window.inactive.border.color: #2b2b2b
+window.active.client.color: #202020
+window.inactive.client.color: #202020
+
+! Titlebar
+window.active.title.bg: flat solid
+window.active.title.bg.color: #202020
+window.inactive.title.bg: flat solid
+window.inactive.title.bg.color: #2b2b2b
+window.active.title.separator.color: #202020
+window.inactive.title.separator.color: #2b2b2b
+window.label.text.justify: left
+window.active.label.bg: parentrelative
+window.inactive.label.bg: parentrelative
+window.active.label.text.color: #ffffff
+window.inactive.label.text.color: #8a8a8a
+
+! Caption buttons: flat, thin glyphs, red close on hover
+window.active.button.*.bg: flat solid
+window.active.button.*.bg.color: #202020
+window.inactive.button.*.bg: flat solid
+window.inactive.button.*.bg.color: #2b2b2b
+window.active.button.*.image.color: #ffffff
+window.inactive.button.*.image.color: #8a8a8a
+window.active.button.disabled.image.color: #5c5c5c
+window.inactive.button.disabled.image.color: #5c5c5c
+
+window.active.button.*.hover.bg: flat solid
+window.active.button.*.hover.bg.color: #333333
+window.active.button.*.hover.image.color: #ffffff
+window.active.button.*.pressed.bg: flat solid
+window.active.button.*.pressed.bg.color: #2a2a2a
+window.active.button.*.pressed.image.color: #c5c5c5
+window.inactive.button.*.hover.bg: flat solid
+window.inactive.button.*.hover.bg.color: #333333
+window.inactive.button.*.pressed.bg: flat solid
+window.inactive.button.*.pressed.bg.color: #2a2a2a
+
+window.active.button.close.hover.bg.color: #c42b1c
+window.active.button.close.hover.image.color: #ffffff
+window.active.button.close.pressed.bg.color: #b22a1b
+window.inactive.button.close.hover.bg.color: #c42b1c
+window.inactive.button.close.hover.image.color: #ffffff
+window.inactive.button.close.pressed.bg.color: #b22a1b
+
+! Menus (window menu, root menu)
+menu.border.width: 1
+menu.border.color: #3a3a3a
+menu.items.bg: flat solid
+menu.items.bg.color: #2c2c2c
+menu.items.text.color: #ffffff
+menu.items.disabled.text.color: #6d6d6d
+menu.items.active.bg: flat solid
+menu.items.active.bg.color: #3a3a3a
+menu.items.active.text.color: #ffffff
+menu.items.active.disabled.text.color: #6d6d6d
+menu.title.bg: flat solid
+menu.title.bg.color: #2c2c2c
+menu.title.text.color: #60cdff
+menu.title.text.justify: left
+menu.separator.color: #3f3f3f
+menu.separator.width: 1
+menu.separator.padding.width: 6
+menu.separator.padding.height: 3
+
+! On-screen display (alt-tab, desktop switch)
+osd.border.width: 1
+osd.border.color: #3a3a3a
+osd.bg: flat solid
+osd.bg.color: #2c2c2c
+osd.label.bg: parentrelative
+osd.label.text.color: #ffffff
+osd.hilight.bg: flat solid
+osd.hilight.bg.color: #60cdff
+osd.unhilight.bg: flat solid
+osd.unhilight.bg.color: #454545

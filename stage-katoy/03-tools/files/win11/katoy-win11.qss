@@ -1,0 +1,198 @@
+/* Shared Windows 11 dark style for KatoyOS apps (welcome wizard, browser).
+ * Icons are resolved from /usr/share/katoyos/win11/. */
+* {
+    font-family: "Inter", "Segoe UI", sans-serif;
+    font-size: 10pt;
+}
+
+QWidget {
+    background: #202020;
+    color: #ffffff;
+}
+
+QLabel {
+    background: transparent;
+}
+
+QLabel#title {
+    font-size: 22pt;
+    font-weight: 600;
+}
+
+QLabel#body {
+    color: #c5c5c5;
+    font-size: 11pt;
+}
+
+QPushButton {
+    background: #2d2d2d;
+    border: 1px solid #3a3a3a;
+    border-radius: 4px;
+    padding: 6px 18px;
+}
+
+QPushButton:hover {
+    background: #333333;
+}
+
+QPushButton:pressed {
+    background: #272727;
+    color: #c5c5c5;
+}
+
+QPushButton:disabled {
+    background: #272727;
+    border-color: #2f2f2f;
+    color: #6d6d6d;
+}
+
+QPushButton#accent {
+    background: #60cdff;
+    border: 1px solid #60cdff;
+    color: #000000;
+    font-weight: 600;
+}
+
+QPushButton#accent:hover {
+    background: #6dd2ff;
+}
+
+QPushButton#accent:pressed {
+    background: #49b4e6;
+    border-color: #49b4e6;
+}
+
+QToolButton {
+    background: transparent;
+    border: none;
+    border-radius: 4px;
+    padding: 6px;
+}
+
+QToolButton:hover {
+    background: #333333;
+}
+
+QToolButton:pressed {
+    background: #272727;
+}
+
+QToolButton:disabled {
+    background: transparent;
+}
+
+QLineEdit,
+QComboBox {
+    background: #2d2d2d;
+    border: 1px solid #3a3a3a;
+    border-bottom: 1px solid #9a9a9a;
+    border-radius: 4px;
+    padding: 6px 10px;
+    selection-background-color: #60cdff;
+    selection-color: #000000;
+}
+
+QLineEdit:hover,
+QComboBox:hover {
+    background: #323232;
+}
+
+QLineEdit:focus,
+QComboBox:on {
+    background: #1f1f1f;
+    border-bottom: 2px solid #60cdff;
+}
+
+QComboBox::drop-down {
+    border: none;
+    width: 28px;
+}
+
+QComboBox::down-arrow {
+    image: url(/usr/share/katoyos/win11/chevron-down.svg);
+    width: 12px;
+    height: 12px;
+}
+
+QComboBox QAbstractItemView {
+    background: #2c2c2c;
+    border: 1px solid #3a3a3a;
+    padding: 4px;
+    outline: 0;
+    selection-background-color: #3a3a3a;
+    selection-color: #ffffff;
+}
+
+QCheckBox {
+    spacing: 10px;
+    background: transparent;
+}
+
+QCheckBox::indicator {
+    width: 18px;
+    height: 18px;
+    border: 1px solid #9a9a9a;
+    border-radius: 4px;
+    background: #2d2d2d;
+}
+
+QCheckBox::indicator:hover {
+    background: #383838;
+}
+
+QCheckBox::indicator:checked {
+    background: #60cdff;
+    border-color: #60cdff;
+    image: url(/usr/share/katoyos/win11/check.svg);
+}
+
+QProgressBar {
+    background: #3a3a3a;
+    border: none;
+    border-radius: 2px;
+    max-height: 4px;
+    min-height: 4px;
+}
+
+QProgressBar::chunk {
+    background: #60cdff;
+    border-radius: 2px;
+}
+
+QScrollBar:vertical {
+    background: transparent;
+    width: 10px;
+    margin: 2px;
+}
+
+QScrollBar::handle:vertical {
+    background: #6d6d6d;
+    border-radius: 3px;
+    min-height: 30px;
+}
+
+QScrollBar::handle:vertical:hover {
+    background: #9a9a9a;
+}
+
+QScrollBar::add-line:vertical,
+QScrollBar::sub-line:vertical,
+QScrollBar::add-page:vertical,
+QScrollBar::sub-page:vertical {
+    background: none;
+    border: none;
+    height: 0;
+}
+
+QMessageBox,
+QDialog {
+    background: #2c2c2c;
+}
+
+QToolTip {
+    background: #2c2c2c;
+    color: #ffffff;
+    border: 1px solid #3a3a3a;
+    border-radius: 4px;
+    padding: 4px 8px;
+}

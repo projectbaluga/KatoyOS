@@ -51,6 +51,23 @@ cat > "$WORK_DIR/boot/firmware/cmdline.txt" <<'EOF'
 console=serial0,115200 console=tty1 root=ROOTDEV rootfstype=ext4 fsck.repair=yes rootwait
 EOF
 
+# Minimal stand-ins for files that earlier pi-gen stages and Debian packages provide
+mkdir -p "$WORK_DIR/etc/xdg/openbox" "$WORK_DIR/usr/share/lxqt/themes/dark"
+touch "$WORK_DIR/usr/share/lxqt/themes/dark/arrow-right.svg" "$WORK_DIR/usr/share/lxqt/themes/dark/preview.png"
+cat > "$WORK_DIR/etc/xdg/openbox/rc.xml" <<'EOF'
+<openbox_config>
+<theme>
+  <name>Clearlooks</name>
+  <titleLayout>NLIMC</titleLayout>
+  <font place="ActiveWindow">
+    <name>sans</name>
+    <size>8</size>
+    <weight>bold</weight>
+  </font>
+</theme>
+</openbox_config>
+EOF
+
 # Define stub on_chroot function and export required variables
 on_chroot() {
     echo "[STUB on_chroot]"
@@ -150,5 +167,32 @@ for pkg in "dbus-x11" "accountsservice" "x11-xserver-utils"; do
         exit 1
     fi
 done
+
+# 7. Assert the Windows 11 theme pieces are installed and wired up
+for f in usr/share/katoyos/win11/katoy-win11.qss \
+         usr/share/themes/Katoy-Win11/openbox-3/themerc \
+         usr/share/themes/Katoy-Win11/openbox-3/close.xbm \
+         usr/share/lxqt/themes/katoy-win11/lxqt-panel.qss \
+         usr/share/lxqt/themes/katoy-win11/lxqt-notificationd.qss \
+         usr/share/lxqt/themes/katoy-win11/lxqt-runner.qss \
+         usr/share/lxqt/themes/katoy-win11/arrow-right.svg; do
+    [ -f "$WORK_DIR/$f" ] || { echo "FAIL: $f missing"; exit 1; }
+done
+[ ! -e "$WORK_DIR/usr/share/lxqt/themes/katoy-win11/preview.png" ] || { echo "FAIL: stale dark-theme preview copied"; exit 1; }
+
+grep -q "^theme=katoy-win11" "$WORK_DIR/etc/xdg/lxqt/lxqt.conf" || { echo "FAIL: lxqt.conf does not select katoy-win11"; exit 1; }
+grep -q "^panelSize=48" "$WORK_DIR/etc/xdg/lxqt/panel.conf" || { echo "FAIL: panel.conf is not 48px"; exit 1; }
+grep -q "<name>Katoy-Win11</name>" "$WORK_DIR/etc/xdg/openbox/rc.xml" || { echo "FAIL: Openbox theme not selected in rc.xml"; exit 1; }
+grep -q "DMZ-White" "$WORK_DIR/usr/share/icons/default/index.theme" || { echo "FAIL: default cursor theme not set"; exit 1; }
+
+# Every plugin listed in panel.conf must have its own section
+PANEL="$WORK_DIR/etc/xdg/lxqt/panel.conf"
+for plugin in $(sed -n 's/^plugins=//p' "$PANEL" | tr -d ' ' | tr ',' ' '); do
+    grep -q "^\\[$plugin\\]" "$PANEL" || { echo "FAIL: panel.conf lists $plugin but has no [$plugin] section"; exit 1; }
+done
+
+# Python tools must compile
+python3 -m py_compile "$REPO_ROOT/stage-katoy/03-tools/files/katoy-welcome" "$REPO_ROOT/stage-katoy/03-tools/files/katoy-browser" \
+    || { echo "FAIL: Python tools do not compile"; exit 1; }
 
 echo "=== All test harness assertions PASSED successfully! ==="

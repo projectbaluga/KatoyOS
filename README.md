@@ -1,60 +1,87 @@
-# KatoyOS
+# KatoyOS — KaraOkePi Appliance
 
 > **Tagline:** "Stable. Rapid. Resilient."
 
-**KatoyOS** is a lightweight, modern, easy-to-use desktop operating system specifically engineered for the **Raspberry Pi 3 Model B (only)**, built on top of Debian 13 ("trixie") via Raspberry Pi OS tooling (`pi-gen`, 32-bit `armhf`).
+**KatoyOS is a dedicated karaoke appliance for the Raspberry Pi 3 Model B.** With the default build setting `KATOY_KIOSK=1`, power on the device, see the KatoyOS Plymouth splash, and go straight into the fullscreen **KaraOkePi** player — no desktop or display manager to navigate. An optional LXQt desktop image is still available by setting `KATOY_KIOSK=0` in `config`.
+
+Built on Debian 13 ("trixie") using Raspberry Pi OS tooling (`pi-gen`) and a 32-bit `armhf` userspace, KatoyOS is designed to turn a Raspberry Pi 3 Model B into a simple, purpose-built Pinoy karaoke system.
 
 ---
 
 ## Preview
 
-### 🖼️ Brand & System Artwork
-<p align="center">
-  <img src="assets/katoyos-brand.png" alt="KatoyOS Brand Artwork" width="800"/>
-</p>
+### 🎤 Default Interface — KaraOkePi
 
-*The KatoyOS brand identity featuring the signature glowing circuit oyster with pearl, emblem of stability, speed, and resilience.*
-
-### 🖥️ Desktop UI & LXQt Integration
-<p align="center">
-  <img src="assets/katoyos-desktop-preview.png" alt="KatoyOS LXQt Desktop Preview" width="850"/>
-</p>
-
-*The KatoyOS desktop interface: Dark LXQt environment on Openbox X11, Inter typography, customized 40px panel, QTerminal showing low idle RAM (~312 MB), and KatoyOS PowerWatch under-voltage notification.*
-
-### 🚀 KatoyOS Welcome Wizard
-<p align="center">
-  <img src="assets/katoyos-welcome-preview.png" alt="KatoyOS Welcome Wizard Setup" width="750"/>
-</p>
-
-*First-boot 5-page setup wizard (`katoy-welcome`): Built in PyQt6 for easy timezone selection, Wi-Fi country code regulation, keyboard layout matching, and user account password management.*
-
-### 🎤 KaraOkePi Player UI
-<p align="center">
-  <img src="assets/katoyos-karaoke-preview.png" alt="KaraOkePi Player Preview" width="750"/>
-</p>
-
-*The "Neon Videoke" player UI (`katoy-karaoke`): karaoke-style word-by-word lyric wipe with outlined text, glass cards, gradient song selection, a numbered reservation queue, auto-hiding controls so the lyric screen stays clean, and an animated end-of-song score card. Everything is drawn with QPainter/QSS (no emoji font, OpenGL or blur effects needed), and scales from 720p to 1080p+.*
+The karaoke player is the primary interface in the standard KatoyOS image.
 
 <p align="center">
-  <img src="assets/katoyos-karaoke-library-preview.png" alt="KaraOkePi Song Library" width="750"/>
+  <img src="assets/katoyos-karaoke-preview.png" alt="KaraOkePi fullscreen karaoke player" width="850"/>
 </p>
+
+*The fullscreen player features karaoke-style word-by-word lyric highlighting, song selection, a reservation queue, auto-hiding controls, and an animated end-of-song score card.*
+
+<p align="center">
+  <img src="assets/katoyos-karaoke-library-preview.png" alt="KaraOkePi song library" width="850"/>
+</p>
+
+*The KaraOkePi song library and selection interface.*
+
+### 🖼️ KatoyOS Brand Artwork
+
+<p align="center">
+  <img src="assets/katoyos-brand.png" alt="KatoyOS brand artwork" width="800"/>
+</p>
+
+*The KatoyOS identity: a glowing circuit oyster with pearl, representing stability, speed, and resilience.*
+
+> The older LXQt desktop and Welcome Wizard screenshots are intentionally not shown here because they represent the optional desktop variant, not the default kiosk appliance. Their image files remain in `assets/`.
 
 ---
 
-## Product Overview & Key Features
+## Product Overview
 
-KatoyOS delivers a responsive, zero-configuration out-of-the-box desktop experience while maximizing hardware performance and extending microSD card lifespan on Raspberry Pi 3 Model B devices.
+### 🎤 KaraOkePi — the default appliance experience
 
-### 🌟 Core Highlights
-- **Targeted Hardware Efficiency:** Tailored exclusively for Raspberry Pi 3 Model B (Broadcom BCM2837, 1 GB RAM, 2.4 GHz Wi-Fi, Bluetooth 4.1, Ethernet over USB 2.0). Idle desktop memory target is under ~400 MB RAM.
-- **Modern Dark Desktop:** LXQt on Openbox (X11) styled with a sleek dark theme, Papirus-Dark icons, Inter sans-serif typography, and a customized 40px bottom panel featuring standard system tray, volume slider, quick-launchers, and KatoyOS branded menu icon.
-- **Zero-Config First Boot & Guided Welcome Wizard (`katoy-welcome`):** Automatically boots into a graphical LXQt desktop as user `katoy` and presents a 5-page wizard (PyQt6) allowing users to easily configure timezones, Wi-Fi country, keyboard layouts, and set new account passwords.
-- **Privilege Separation (`katoy-helper` + Polkit):** Administrative tasks configured in the Welcome wizard use a dedicated, strictly validated helper binary controlled by Polkit authorization policies (`os.katoy.helper`), avoiding the safety risks of running complex GUIs as root.
-- **Hardware Watchdog (`katoy-powerwatch`):** Actively monitors hardware status registers (`/sys/devices/platform/soc/soc:firmware/get_throttled`) to issue desktop notifications upon detecting power supply drops (under-voltage) or soft thermal throttling.
-- **SD-Card Resilience:** System logs configured to RAM-only (`Storage=volatile` with `32M` ceiling in `journald`), combined with zram compressed swap (`rpi-swap`), significantly reduces physical flash wear.
-- **Seamless Updates (`katoy-update`):** Includes a one-click graphical terminal updater for performing system and package updates on demand.
-- **Standalone Karaoke System (KaraOkePi / `katoy-karaoke`):** Dedicated fullscreen MIDI/KAR player application powered by FluidSynth and PipeWire audio synthesis. Includes a dedicated FAT32 `KATOYDATA` partition on the SD card that automatically expands on first boot to fill all remaining SD card space (while rootfs remains at image size). Users can plug the SD card into any Windows, Mac, or Linux computer to copy songs, SoundFonts, and background graphics directly onto it.
+KatoyOS is built to behave like a karaoke machine, not a general-purpose desktop computer. The default boot path is:
+
+`Power on → Plymouth splash → katoy-karaoke.service → fullscreen KaraOkePi player`
+
+- **Direct kiosk startup:** `katoy-karaoke.service` starts from `multi-user.target` on tty1. It creates a real PAM/logind login session for the `katoy` user and launches X11 through `xinit`, followed by the KaraOkePi launcher and player.
+- **No display manager:** Kiosk mode does not use LightDM or a graphical login screen.
+- **Automatic recovery:** systemd restarts the player if it exits. If repeated startup failures reach the service start limit, `OnFailure` hands tty1 back to `getty` for a login prompt.
+- **Maintenance access:** Use TTY2 (`Ctrl+Alt+F2)) for a local maintenance shell. SSH is disabled in the default build; enable it manually if remote administration is needed.
+- **Karaoke data partition:** A dedicated FAT32 `KATOYDATA` partition stores songs, SoundFonts, and background graphics. It expands on first boot to use the remaining SD-card space, while the root filesystem remains at its image size.
+
+### KaraOkePi features
+
+- **MIDI/KAR playback:** Fullscreen PyQt6 player powered by FluidSynth and PipeWire audio synthesis.
+- **Synced lyrics:** Reads MIDI lyric meta-events and highlights lyrics in time with playback.
+- **Song reservation queue:** Queue upcoming songs and display the next singer/song banner.
+- **Performance controls:** Key/pitch transpose, tempo adjustment, and end-of-song scoring.
+- **Microphone and audio routing:** Low-latency microphone monitoring, separate mic/music volume controls, and output selection for HDMI, 3.5 mm audio, or USB DAC.
+- **Phone remote and Wi-Fi onboarding:** A mobile-friendly LAN interface at `http://<pi-ip>:8080`, with an idle-screen QR code. If Wi-Fi is unavailable, the player can bring up a NetworkManager setup hotspot.
+- **USB library support:** Automatically scans removable USB drives for songs, SoundFonts (`.sf2`), and background graphics.
+- **SD-card friendly library:** The SQLite song database can live on the USB drive, avoiding routine database writes to the system SD card.
+- **Cascading configuration:** In-player settings and USB-root `.katoy-karaoke.conf` overrides allow appliance customization.
+
+### Optional LXQt desktop build
+
+A traditional desktop variant remains available for users who want a general-purpose graphical environment. Set `KATOY_KIOSK=0` in `config` before building.
+
+The optional desktop image uses:
+- **LXQt on Openbox/X11**, with a dark theme, Papirus-Dark icons, Inter typography, and a customized panel.
+- **LightDM auto-login** for the `katoy` account.
+- **KatoyOS Welcome Wizard (`katoy-welcome`):** a PyQt6 first-run setup flow for timezone, Wi-Fi country, keyboard layout, and password configuration.
+- **Desktop utilities:** KatoyOS PowerWatch notifications and the graphical `katoy-update` launcher.
+
+These desktop components are not the default user interface when `KATOY_KIOSK=1`.
+
+### Shared system features
+
+- **Raspberry Pi 3 Model B tuning:** Targets the BCM2837 platform with 1 GB RAM, Wi-Fi, Bluetooth, and Ethernet.
+- **Hardware PowerWatch:** Monitors firmware throttling flags and can report under-voltage or thermal-throttling events.
+- **Reduced SD-card wear:** Journald is configured for volatile RAM storage with a 32 MB runtime limit; zram swap is provided by the base system.
+- **System updates:** The `katoy-update` tool provides an on-demand package update path.
 
 ---
 
@@ -63,48 +90,74 @@ KatoyOS delivers a responsive, zero-configuration out-of-the-box desktop experie
 | Feature | Specification |
 | --- | --- |
 | **Base Distribution** | Debian 13 "trixie" (`armhf`, 32-bit userland) |
-| **Kernel Target** | Raspberry Pi v7 kernel (`kernel7.img`, Cortex-A53 in 32-bit mode) |
-| **Display Server & WM** | X11 with Openbox window manager |
-| **Desktop Environment** | LXQt (Fusion style, dark theme, Papirus-Dark icons) |
-| **Display Manager** | LightDM (`lightdm-gtk-greeter`) with auto-login |
-| **Default User** | `katoy` (Password: `changeme` - prompted to change on first boot) |
+| **Hardware Target** | Raspberry Pi 3 Model B |
+| **Kernel Target** | Raspberry Pi v7 kernel (`kernel7.img`, 32-bit mode) |
+| **Default UI / Boot Mode** | KaraOkePi fullscreen kiosk (`KATOY_KIOSK=1`) |
+| **Display Manager** | None (kiosk boots via `katoy-karaoke.service` on tty1) |
+| **Display Server** | X11 via `xinit` (no WM in kiosk mode; Openbox + LXQt only in desktop build) |
+| **Optional Desktop** | LXQt + Openbox + LightDM (`KATOY_KIOSK=0`) |
+| **Default User** | `katoy` (created at build time) |
 | **Default Hostname** | `katoyos` |
-| **Default Locale & Timezone** | `en_US.UTF-8`, Keyboard: `us`, Timezone: `UTC` |
-| **Audio Stack** | PipeWire with WirePlumber and Pavucontrol-Qt |
-| **Network Manager** | NetworkManager + `nm-tray` with `nmtui` integration |
+| **Default Locale & Timezone** | `en_US.UTF-8`, keyboard: `us`, timezone: `UTC` |
+| **SSH** | Disabled by default (`ENABLE_SSH=0`); enable manually when required |
+| **Audio Stack** | PipeWire / WirePlumber with FluidSynth for karaoke playback |
+| **Network** | NetworkManager |
+| **Read-only Root** | Optional `KATOY_OVERLAYFS=1` enables OverlayFS; default is `0` in `config` |
+| **Pi 3 Display Driver** | `KATOY_FKMS=1` selects `vc4-fkms-v3d`; set to `0` for stock full-KMS `vc4-kms-v3d` |
 
 ---
 
-## First Boot & Welcome Wizard
+## First Boot & Maintenance
 
-When KatoyOS boots for the first time:
-1. **Oyster Plymouth Splash:** A dark-navy themed boot screen displays while the system initializes.
-2. **Auto-Login:** Boots straight to the LXQt desktop without requiring password input.
-3. **KatoyOS Welcome Wizard (`katoy-welcome`):** Automatically launches to assist with initial setup:
-   - **Welcome Page:** Introduction and "don't show again" option.
-   - **Network Page:** Wi-Fi setup note and direct button to launch `nmtui` network configuration.
-   - **Region & Keyboard:** Timezone picker, Wi-Fi country code selector (`raspi-config nonint do_wifi_country`), and xkb keyboard layout selection.
-   - **Password Page:** Secure password updater for `katoy`.
-   - **Finish:** Applies options live via `katoy-helper` and marks setup complete.
+### Default kiosk image (`KATOY_KIOSK=1`)
+
+1. **Power on:** The device displays the KatoyOS Plymouth splash while Linux starts.
+2. **Player startup:** systemd starts `katoy-karaoke.service` on tty1. The service opens the `katoy` PAM session, starts X11 with `xinit`, and launches the fullscreen KaraOkePi player.
+3. **Maintenance:** Press `Ctrl+Alt+F2` to switch to TTY2 for a local shell. Return to the player on tty1 with `Ctrl+Alt+F1`. SSH is off by default and must be enabled manually.
+
+There is no LightDM auto-login screen or Welcome Wizard in the default kiosk flow.
+
+### Optional desktop image (`KATOY_KIOSK=0`)
+
+The desktop variant enables LightDM auto-login into LXQt and can launch the `katoy-welcome` wizard. The wizard provides:
+- **Welcome:** Introduction and a "don't show again" option.
+- **Network:** Wi-Fi setup guidance and a shortcut to `nmtui`.
+- **Region & Keyboard:** Timezone, Wi-Fi country, and keyboard layout settings.
+- **Password:** A password update flow for the `katoy` account.
+- **Finish:** Applies settings through the privileged `katoy-helper` and marks setup complete.
+
+This wizard description applies only to the optional desktop build.
+
+---
+
+## No Package-Configuration Dialogs
+
+KatoyOS configures package management to avoid interactive package-configuration dialogs during normal appliance operation and updates:
+
+- **Debconf frontend:** The Pi 3 stage sets debconf to `Noninteractive` and critical priority.
+- **Safe configuration-file handling:** APT's `90katoy-noninteractive` configuration sets `--force-confdef` and `--force-confold` for dpkg configuration files.
+- **Background package services:** apt daily services and timers, PackageKit, apt-listchanges units, and related automatic package activity are masked.
+- **Unattended upgrades:** `unattended-upgrades` is purged from the image.
+- **Build-time package check:** The image build runs `dpkg --configure -a` and checks for packages left in an incomplete configuration state.
+- **Package-operation trace:** The `katoy-apt-trace` hook records the process chain that invoked apt/dpkg. Its log is written to `/boot/firmware/katoy-apt-trace.log` when that partition is writable (otherwise it falls back to `/var/log/katoy-apt-trace.log`).
+
+These controls cover the package-management paths configured by KatoyOS; they do not prevent an unrelated application from displaying its own custom graphical interface.
 
 ---
 
 ## Custom KatoyOS Tools
 
-- **`katoy-welcome`** (`/usr/bin/katoy-welcome`): PyQt6 setup wizard running on session startup until completed.
-- **`katoy-helper`** (`/usr/lib/katoyos/helper`): Privileged bash script invoked via Polkit (`pkexec`) for secure timezone, keyboard, wifi-country, and password changes.
-- **`katoy-powerwatch`** (`/usr/bin/katoy-powerwatch`): Background daemon polling firmware throttling bits and notifying the user if power supply voltage is low or temperature limits are reached.
-- **`katoy-update`** (`/usr/bin/katoy-update`): Graphical menu tool launching system package upgrade in `qterminal`.
-- **`katoy-karaoke`** (`/usr/bin/katoy-karaoke`): Fullscreen PyQt6 standalone Pinoy videoke MIDI/KAR player.
-  - **Pinoy Karaoke Features:** Song queue reservation system (`R` shortcut & side panel), Key/Pitch Transpose (`-`/`+` semi-tones), Tempo Adjustment (`[`/`]` 50%-150%), "NEXT UP" banner, real mic VAD scoring or fun random scoring overlay with Pinoy praise banners.
-  - **Microphone Chain & Audio Routing:** PipeWire/PulseAudio low-latency dry mic monitoring via `module-loopback`, separate mic/music volume controls, and output device selection (HDMI, 3.5mm jack, USB DAC).
-  - **Phone Remote Web App & Wi-Fi Onboarding:** Mobile-friendly LAN web interface (`http://<pi-ip>:8080`) served on a background thread with an idle screen QR code. If Wi-Fi is disconnected, automatically hosts a NetworkManager setup hotspot.
-  - **Appliance Direct-Boot (`KATOY_KIOSK=1`, default):** Power on -> Plymouth splash -> karaoke player. `katoy-karaoke.service` (enabled at build time) logs `katoy` into a real PAM/logind session on tty1 and runs `xinit` -> `katoy-karaoke-launcher` -> `katoy-karaoke`; there is no display manager and the default target is `multi-user.target`. The player paints its first frame before doing any slow work (audio chain, Wi-Fi checks and boot-time measurement are deferred/retried in the background). If the player crashes repeatedly, systemd falls back to a login prompt on tty1. Maintenance shell: TTY2 (`Ctrl+Alt+F2`) or SSH as `katoy`. Set `KATOY_KIOSK=0` in `config` to build the old LXQt desktop image instead.
-  - **Cascading Config & Settings UI:** In-player graphical settings screen and support for USB root `.katoy-karaoke.conf` cascading overrides.
-  - **USB Auto-Detection:** Automatically scans plugged-in USB removable flash drives (`/media/katoy`, `/media`, `/run/media/katoy`) for songs, SoundFonts (`.sf2`), and background graphics.
-  - **Zero SD-Card Writes:** Main SQLite song database (`.katoy-karaoke.db`) is stored directly on the USB drive, keeping search fast across ~40,000 tracks while protecting SD-card wear.
-  - **Synced Lyrics & FluidSynth Playback:** Parses MIDI lyric meta-events using `mido` to display real-time highlighted scrolling lyrics with FluidSynth audio synthesized over PipeWire.
-  - **Configuration (`/etc/katoyos/karaoke.conf`):** Supports customizing song directories (`SONGS_DIR`), SoundFont locations (`SOUNDFONT`), background images (`BACKGROUND`), audio driver (`AUDIO_DRIVER=pulseaudio`), fullscreen display (`FULLSCREEN=1`), appliance mode (`KIOSK=1`, Esc never quits the player) and the Wi-Fi setup hotspot delay (`HOTSPOT_GRACE`, default 45 s).
+- **`katoy-karaoke`** (`/usr/bin/katoy-karaoke`): Fullscreen PyQt6 Pinoy videoke MIDI/KAR player.
+- **`katoy-karaoke-launcher`** (`/usr/bin/katoy-karaoke-launcher`): Prepares and launches the player session.
+- **`katoy-karaoke-session`** (`/usr/bin/katoy-karaoke-session`): Session support for the karaoke appliance.
+- **`katoy-karaoke.service`** (`/etc/systemd/system/katoy-karaoke.service`): Starts and supervises the tty1 kiosk session.
+- **`katoy-update`** (`/usr/bin/katoy-update`): On-demand system package updater.
+- **`katoy-helper`** (`/usr/lib/katoyos/helper`): Privileged helper used by supported desktop setup actions.
+- **`katoy-powerwatch`** (`/usr/bin/katoy-powerwatch`): Monitors Raspberry Pi firmware throttling status.
+- **`katoy-welcome`** (`/usr/bin/katoy-welcome`): First-run setup wizard for the optional desktop build.
+- **`katoy-apt-trace`** (`/usr/lib/katoyos/apt-trace`): Logs apt/dpkg process ancestry for troubleshooting.
+
+KaraOkePi settings are stored in `/etc/katoyos/karaoke.conf`. Supported settings include song directories (`SONGS_DIR`), SoundFont locations (`SOUNDFONT`), background images (`BACKGROUND`), audio driver, fullscreen mode, kiosk behavior, and Wi-Fi hotspot timing.
 
 ---
 
@@ -113,9 +166,10 @@ When KatoyOS boots for the first time:
 Building KatoyOS produces a flashable `KatoyOS-*.img.xz` image from source using `pi-gen`.
 
 ### Prerequisites
-- Host OS: Linux or WSL2 (Ubuntu 22.04/24.04 recommended, working inside the Linux filesystem, **not** `/mnt/c/`)
-- Dependencies: Docker, `git`, `python3-pillow`, `qemu-user-static`, `binfmt-support`
-- Disk Space: ~15-20 GB free space
+
+- **Host OS:** Linux or WSL2 (Ubuntu 22.04/24.04 recommended; work inside the Linux filesystem, not `/mnt/c/`).
+- **Dependencies:** Docker, `git`, `python3-pillow`, `qemu-user-static`, and `binfmt-support`.
+- **Disk space:** Approximately 15–20 GB free.
 
 ### One-Command Build
 
@@ -125,13 +179,16 @@ Building KatoyOS produces a flashable `KatoyOS-*.img.xz` image from source using
 
 `build.sh` automatically:
 1. Clones the pinned `pi-gen` release tag (`2026-10-06-raspios-trixie-armhf`).
-2. Uses the brand assets committed in `stage-katoy/01-branding/files/` as they are (`tools/make-assets.py --force` regenerates them from `assets/katoyos-brand.png`, overwriting any hand edits).
-3. Injects custom `stage-katoy` sub-stages (packages, branding, desktop, tools, Pi 3 tuning).
-4. Patches `pi-gen` inode density settings (`mke2fs -i 8192`) to prevent rootfs allocation errors.
-5. Executes `./build-docker.sh` and exports compressed image artifacts to `./out/ KatoyOS-*.img.xz`.
+2. Uses the brand assets committed in `stage-katoy/01-branding/files/`; `tools/make-assets.py --force` regenerates them from `assets/katoyos-brand.png`.
+3. Injects the custom `stage-katoy` sub-stages for packages, branding, desktop support, tools, and Raspberry Pi 3 tuning.
+4. Applies the configured pi-gen inode-density adjustment (`mke2fs -i 8192`).
+5. Runs `./build-docker.sh` and exports compressed image artifacts to `./out/KatoyOS-*.img.xz`.
+
+The default `config` builds the karaoke appliance. To build the optional LXQt desktop instead, change `KATOY_KIOSK=1` to `KATOY_KIOSK=0` before running the build.
 
 ### CI/CD Build
-A GitHub Actions workflow is provided in `.github/workflows/build.yml`. It runs automatically on version tags (`v*`) or manual `workflow_dispatch` triggers, producing downloadable build artifacts.
+
+A GitHub Actions workflow is provided in `.github/workflows/build.yml`. It runs on version tags (`v*`) or manual `workflow_dispatch` triggers and produces downloadable build artifacts.
 
 ---
 
@@ -139,9 +196,9 @@ A GitHub Actions workflow is provided in `.github/workflows/build.yml`. It runs 
 
 1. Download or locate `out/KatoyOS-*.img.xz`.
 2. Open [Raspberry Pi Imager](https://www.raspberrypi.com/software/).
-3. Choose **OS** -> **Use Custom** and select your `KatoyOS-*.img.xz` file.
-4. Select your Target SD Card and click **Write**.
-5. Insert the SD card into your **Raspberry Pi 3 Model B** and power on!
+3. Choose **OS → Use Custom** and select the `KatoyOS-*.img.xz` file.
+4. Select the target SD card and click **Write**.
+5. Insert the SD card into your **Raspberry Pi 3 Model B** and power it on.
 
 ---
 
@@ -149,37 +206,53 @@ A GitHub Actions workflow is provided in `.github/workflows/build.yml`. It runs 
 
 ```
 katoyos/
-├── README.md                    Product overview, preview, build & flash guide
-├── LICENSE                      MIT License
-├── config                       pi-gen build configuration
-├── build.sh                     Automated build script
+├── README.md                         Appliance overview, previews, build & flash guide
+├── LICENSE                           MIT License
+├── config                            pi-gen build configuration (KATOY_KIOSK=1 by default)
+├── build.sh                          Automated build script
+├── katoyos-blackscreen-fix.patch     Raspberry Pi display/black-screen fix
+├── katoyos-boot-and-ui.patch         Boot and UI integration patch
+├── katoyos-fkms-incremental.patch    FKMS-related incremental patch
 ├── assets/
-│   └── katoyos-brand.png        Original 1024x572 branding canvas
+│   ├── katoyos-brand.png
+│   ├── katoyos-karaoke-preview.png
+│   ├── katoyos-karaoke-library-preview.png
+│   ├── katoyos-desktop-preview.png   Legacy desktop capture (not shown in default preview)
+│   └── katoyos-welcome-preview.png   Legacy wizard capture (not shown in default preview)
 ├── tools/
-│   ├── make-assets.py           Pillow script deriving wallpaper, splash, and icons
-│   └── test-stage.sh            Dry-run stage verification test harness
+│   ├── make-assets.py                Branding asset generator
+│   └── test-stage.sh                 Stage verification test harness
 ├── docs/
-│   ├── DECISIONS.md             Technical decisions log
-│   └── BUILDING.md              Build requirements & WSL2 instructions
+│   ├── DECISIONS.md                  Technical decisions log
+│   └── BUILDING.md                   Build requirements & WSL2 instructions
 ├── .github/
-│   └── workflows/build.yml      GitHub Actions automated CI workflow
-└── stage-katoy/                 Custom pi-gen build stage
+│   └── workflows/build.yml           GitHub Actions build workflow
+└── stage-katoy/
     ├── EXPORT_IMAGE
     ├── prerun.sh
-    ├── 00-packages/             Essential & best-effort package lists
-    ├── 01-branding/             OS identity, release files, wallpaper, Plymouth splash
-    ├── 02-desktop/              LXQt, Openbox, LightDM, GTK, panel, & font configs
-    ├── 03-tools/                katoy-welcome, helper, powerwatch, polkit policy
-    └── 04-pi3/                  config.txt, cmdline.txt, journald, kernel pruning
+    ├── 00-packages/                  Base and optional package lists
+    ├── 01-branding/                  OS identity, artwork, Plymouth splash
+    ├── 02-desktop/                   Optional LXQt, Openbox, LightDM configuration
+    ├── 03-tools/
+    │   ├── 00-run.sh                 Installs appliance and desktop support tools
+    │   └── files/
+    │       ├── katoy-karaoke
+    │       ├── katoy-karaoke-launcher
+    │       ├── katoy-karaoke-session
+    │       ├── katoy-karaoke.service
+    │       ├── katoy-update
+    │       ├── katoy-helper
+    │       ├── katoy-apt-trace
+    │       ├── katoy-welcome
+    │       ├── katoy-powerwatch
+    │       └── 90katoy-noninteractive
+    └── 04-pi3/                       Pi 3 boot, display, package, and system tuning
 ```
 
 ---
 
 ## Status & Verification
 
-All scripts in KatoyOS are validated with `bash -n`, `python -m py_compile`, and `tools/test-stage.sh` dry-run assertions.
-- Dry-run stage assertions: **Passed**
-- Asset generator pipeline: **Passed**
-- Helper input validation tests: **Passed**
-- Build script Docker integration: **Verified**
-- Image & Package Footprint Measurements (Phase 4): **Pending on-hardware / pi-gen build** (Target `.img.xz` compressed size: ~700 MB; Target idle RAM: <400 MB).
+The repository includes shell syntax checks, Python compilation checks, and the `tools/test-stage.sh` dry-run test harness. Run the checks locally before producing or distributing a new image.
+
+Hardware-specific behavior — including display output, audio devices, USB song discovery, and optional OverlayFS operation — should be verified on the target Raspberry Pi 3 Model B before deployment.

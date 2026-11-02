@@ -24,9 +24,9 @@ To build KatoyOS, your host system must have:
    cd katoyos
    ```
 
-2. **Run the asset generator (optional, assets pre-generated):**
+2. **Brand assets (optional, already committed):** the wallpaper, boot splash and icons in `stage-katoy/01-branding/files/` are used exactly as committed. Only if you want to regenerate them from `assets/katoyos-brand.png`, run this, which OVERWRITES hand-edited versions:
    ```bash
-   python3 tools/make-assets.py
+   python3 tools/make-assets.py --force
    ```
 
 3. **Execute the build script:**

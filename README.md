@@ -125,7 +125,7 @@ Building KatoyOS produces a flashable `KatoyOS-*.img.xz` image from source using
 
 `build.sh` automatically:
 1. Clones the pinned `pi-gen` release tag (`2026-10-06-raspios-trixie-armhf`).
-2. Generates all derived brand assets from `assets/katoyos-brand.png` via `tools/make-assets.py`.
+2. Uses the brand assets committed in `stage-katoy/01-branding/files/` as they are (`tools/make-assets.py --force` regenerates them from `assets/katoyos-brand.png`, overwriting any hand edits).
 3. Injects custom `stage-katoy` sub-stages (packages, branding, desktop, tools, Pi 3 tuning).
 4. Patches `pi-gen` inode density settings (`mke2fs -i 8192`) to prevent rootfs allocation errors.
 5. Executes `./build-docker.sh` and exports compressed image artifacts to `./out/ KatoyOS-*.img.xz`.

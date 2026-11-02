@@ -24,10 +24,6 @@ jobs:
         run: |
           pytest tests/
 
-      - name: Generate assets
-        run: |
-          python3 tools/make-assets.py
-
       - name: Build KatoyOS
         run: |
           ./build.sh

@@ -1,6 +1,11 @@
 #!/usr/bin/env python3
 """
 Regenerates all derived KatoyOS brand assets from assets/katoyos-brand.png.
+
+WARNING: this OVERWRITES the committed wallpaper, boot splash and icons, including any that
+were edited by hand. It is therefore NOT part of the build; run it only on purpose:
+    python3 tools/make-assets.py --force
+
 Produces:
   - stage-katoy/01-branding/files/wallpaper.png (1920x1080)
   - stage-katoy/01-branding/files/plymouth-splash.png (1280px wide)
@@ -16,6 +21,9 @@ BRAND_PATH = ROOT / "assets/katoyos-brand.png"
 DEST_DIR = ROOT / "stage-katoy/01-branding/files"
 
 def main():
+    if "--force" not in sys.argv[1:]:
+        sys.exit("Refusing to overwrite the committed brand assets (splash, wallpaper, icons).\n"
+                 "Run with --force if you really want to regenerate them from assets/katoyos-brand.png.")
     if not BRAND_PATH.exists():
         print(f"Error: Brand image not found at {BRAND_PATH}", file=sys.stderr)
         sys.exit(1)

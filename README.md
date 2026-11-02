@@ -49,7 +49,7 @@ KatoyOS is built to behave like a karaoke machine, not a general-purpose desktop
 - **Direct kiosk startup:** `katoy-karaoke.service` starts from `multi-user.target` on tty1. It creates a real PAM/logind login session for the `katoy` user and launches X11 through `xinit`, followed by the KaraOkePi launcher and player.
 - **No display manager:** Kiosk mode does not use LightDM or a graphical login screen.
 - **Automatic recovery:** systemd restarts the player if it exits. If repeated startup failures reach the service start limit, `OnFailure` hands tty1 back to `getty` for a login prompt.
-- **Maintenance access:** Use TTY2 (`Ctrl+Alt+F2)) for a local maintenance shell. SSH is disabled in the default build; enable it manually if remote administration is needed.
+- **Maintenance access:** Use TTY2 (`Ctrl+Alt+F2`) for a local maintenance shell. SSH is disabled in the default build; enable it manually if remote administration is needed.
 - **Karaoke data partition:** A dedicated FAT32 `KATOYDATA` partition stores songs, SoundFonts, and background graphics. It expands on first boot to use the remaining SD-card space, while the root filesystem remains at its image size.
 
 ### KaraOkePi features
@@ -151,6 +151,7 @@ These controls cover the package-management paths configured by KatoyOS; they do
 - **`katoy-karaoke-launcher`** (`/usr/bin/katoy-karaoke-launcher`): Prepares and launches the player session.
 - **`katoy-karaoke-session`** (`/usr/bin/katoy-karaoke-session`): Session support for the karaoke appliance.
 - **`katoy-karaoke.service`** (`/etc/systemd/system/katoy-karaoke.service`): Starts and supervises the tty1 kiosk session.
+- **`katoy-expand-data`** (`/usr/bin/katoy-expand-data`): Expands the dedicated karaoke data partition on first boot.
 - **`katoy-update`** (`/usr/bin/katoy-update`): On-demand system package updater.
 - **`katoy-helper`** (`/usr/lib/katoyos/helper`): Privileged helper used by supported desktop setup actions.
 - **`katoy-powerwatch`** (`/usr/bin/katoy-powerwatch`): Monitors Raspberry Pi firmware throttling status.

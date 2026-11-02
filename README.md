@@ -12,19 +12,21 @@ Built on Debian 13 ("trixie") using Raspberry Pi OS tooling (`pi-gen`) and a 32-
 
 ### 🎤 Default Interface — KaraOkePi
 
-The karaoke player is the primary interface in the standard KatoyOS image.
+The default `KATOY_KIOSK=1` image boots directly into the fullscreen KaraOkePi player. The screenshots below are the existing player/library previews; fresh captures from a built image or Raspberry Pi 3B are **pending** and should be added after on-device verification.
 
 <p align="center">
-  <img src="assets/katoyos-karaoke-preview.png" alt="KaraOkePi fullscreen karaoke player" width="850"/>
+  <img src="assets/katoyos-karaoke-preview.png" alt="Existing preview of the KaraOkePi fullscreen player; awaiting a fresh device capture" width="850"/>
 </p>
 
-*The fullscreen player features karaoke-style word-by-word lyric highlighting, song selection, a reservation queue, auto-hiding controls, and an animated end-of-song score card.*
+*Existing player preview — refresh this capture from the current default kiosk image.*
 
 <p align="center">
-  <img src="assets/katoyos-karaoke-library-preview.png" alt="KaraOkePi song library" width="850"/>
+  <img src="assets/katoyos-karaoke-library-preview.png" alt="Existing preview of the KaraOkePi song library; awaiting a fresh device capture" width="850"/>
 </p>
 
-*The KaraOkePi song library and selection interface.*
+*Existing song-library preview — refresh this capture from the current default kiosk image.*
+
+> **Fresh screenshots pending:** This session has no Raspberry Pi 3B device or runnable pi-gen build environment, so no new player, library, or boot-splash screenshots have been fabricated. The legacy LXQt desktop and Welcome Wizard screenshots have been removed because they do not represent the default kiosk experience. No Welcome Wizard is launched in kiosk mode.
 
 ### 🖼️ KatoyOS Brand Artwork
 
@@ -33,8 +35,6 @@ The karaoke player is the primary interface in the standard KatoyOS image.
 </p>
 
 *The KatoyOS identity: a glowing circuit oyster with pearl, representing stability, speed, and resilience.*
-
-> The older LXQt desktop and Welcome Wizard screenshots are intentionally not shown here because they represent the optional desktop variant, not the default kiosk appliance. Their image files remain in `assets/`.
 
 ---
 
@@ -218,8 +218,6 @@ katoyos/
 │   ├── katoyos-brand.png
 │   ├── katoyos-karaoke-preview.png
 │   ├── katoyos-karaoke-library-preview.png
-│   ├── katoyos-desktop-preview.png   Legacy desktop capture (not shown in default preview)
-│   └── katoyos-welcome-preview.png   Legacy wizard capture (not shown in default preview)
 ├── tools/
 │   ├── make-assets.py                Branding asset generator
 │   └── test-stage.sh                 Stage verification test harness

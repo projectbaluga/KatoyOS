@@ -218,7 +218,7 @@ katoyos/
 │   ├── katoyos-brand.png
 │   ├── katoyos-karaoke-preview.png
 │   ├── katoyos-karaoke-library-preview.png
-│├── tools/
+├── tools/
 │   ├── make-assets.py                Branding asset generator
 │   └── test-stage.sh                 Stage verification test harness
 ├── docs/

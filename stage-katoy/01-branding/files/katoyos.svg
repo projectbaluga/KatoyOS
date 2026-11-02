@@ -1,10 +1,22 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128">
-  <rect width="128" height="128" rx="16" fill="#ffffff"/>
-  <!-- Simplified oyster outline approximation -->
-  <g fill="none" stroke="#000000" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-    <path d="M64 20 C40 25, 25 45, 28 70 C30 90, 45 105, 64 108 C83 105, 98 90, 100 70 C103 45, 88 25, 64 20 Z"/>
-    <path d="M50 45 C55 40, 70 40, 75 50 C80 60, 70 75, 60 80 C50 75, 45 60, 50 45 Z"/>
-    <path d="M55 55 Q64 50 72 58"/>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+  <rect width="1024" height="1024" rx="128" fill="#030616"/>
+  <!-- Stylized KatoyOS oyster logo matching line-art brand asset -->
+  <g fill="none" stroke="#ffffff" stroke-width="20" stroke-linecap="round" stroke-linejoin="round">
+    <!-- Outer Shell Contour -->
+    <path d="M512 60 C590 60, 680 140, 720 220 C760 300, 800 420, 770 540 C740 660, 660 760, 560 810 C510 835, 470 840, 440 820 C400 790, 360 770, 330 710 C290 630, 240 500, 260 380 C280 260, 340 140, 430 85 C465 65, 490 60, 512 60 Z"/>
+    <!-- Shell Outer Ridge Rings -->
+    <path d="M470 125 C550 125, 630 180, 665 260 C700 340, 725 450, 700 560 C675 670, 610 745, 515 780 C445 805, 385 750, 345 680 C305 610, 285 490, 305 380 C325 270, 380 180, 470 125 Z"/>
+    <path d="M485 170 C545 170, 610 220, 635 300 C660 380, 675 490, 650 590 C625 690, 550 740, 475 750 C410 760, 360 690, 335 600 C310 510, 320 390, 360 290 C400 190, 445 170, 485 170 Z"/>
+    <!-- Inner Cavity / Mantle Border -->
+    <path d="M500 230 C535 230, 590 280, 605 350 C620 420, 640 520, 600 630 C560 740, 470 770, 400 725 C350 695, 360 620, 375 550 C390 480, 380 400, 415 320 C450 240, 475 230, 500 230 Z"/>
+    <!-- Adductor / Muscle / Pearl Texture -->
+    <path d="M460 270 C490 260, 525 270, 535 300 C545 330, 520 370, 480 380 C440 390, 420 350, 425 320 C430 290, 440 275, 460 270 Z"/>
+    <path d="M470 300 C485 290, 505 300, 505 320 C505 340, 485 350, 470 340 C455 330, 455 310, 470 300 Z"/>
+    <!-- Lower Body / Shell Lip Creases -->
+    <path d="M430 450 C470 430, 510 470, 515 530 C520 590, 460 640, 400 620 C360 605, 350 540, 380 490 C400 460, 415 455, 430 450 Z"/>
+    <path d="M380 540 C410 580, 460 595, 490 565"/>
+    <path d="M440 680 C500 710, 570 660, 610 560 C640 480, 630 380, 620 330"/>
   </g>
-  <text x="64" y="122" text-anchor="middle" font-family="Arial, sans-serif" font-size="14" font-weight="bold" fill="#000000">KatoyOS</text>
+  <!-- KatoyOS Wordmark -->
+  <text x="512" y="945" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Inter', 'Segoe UI', Arial, sans-serif" font-size="80" font-weight="800" letter-spacing="2" fill="#ffffff">KatoyOS</text>
 </svg>

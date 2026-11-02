@@ -183,7 +183,7 @@ fi
 if command -v debconf-get-selections >/dev/null 2>&1; then
 	frontend=$(debconf-get-selections | awk '$1 == "debconf" && $2 == "debconf/frontend" { print $4; exit }')
 else
-	frontend=$(printf 'GET debconf/frontend\\n' | debconf-communicate debconf | awk '$1 == "0" { $1=""; sub(/^[[:space:]]+/, ""); print; exit }')
+	frontend=$(printf 'GET debconf/frontend\n' | debconf-communicate debconf | awk '$1 == "0" { $1=""; sub(/^[[:space:]]+/, ""); print; exit }')
 fi
 if [ "$frontend" != "Noninteractive" ]; then
 	echo "ERROR: debconf frontend is not persistently set to Noninteractive (found: $frontend)."

@@ -1,30 +1,33 @@
 #!/usr/bin/env python3
 """Simple web browser for KatoyOS with search fallback and basic internet browsing."""
 import os
+import re
 import shutil
+import subprocess
 import sys
 import urllib.parse
+import urllib.request
 from pathlib import Path
 
 try:
-    from PyQt6.QtCore import QSize, QUrl
+    from PyQt6.QtCore import QSize, QThread, QUrl, pyqtSignal
     from PyQt6.QtGui import QIcon
-    from PyQt6.QtWidgets import QApplication, QHBoxLayout, QLineEdit, QMainWindow, QToolButton, QVBoxLayout, QWidget
-    from PyQt6.QtWebEngineWidgets import QWebEngineView
-except ImportError as exc:  # pragma: no cover - runtime dependency issue
-    # Launched from the menu there is no terminal, so an error message would be
-    # invisible. Hand over to Falkon instead of failing silently.
-    fallback = shutil.which("falkon")
-    if fallback:
-        os.execv(fallback, [fallback, *sys.argv[1:]])
+    from PyQt6.QtWidgets import (QApplication, QHBoxLayout, QLineEdit, QMainWindow,
+                                 QProgressBar, QTextBrowser, QToolButton, QVBoxLayout, QWidget)
+except ImportError as exc:  # pragma: no cover
     raise SystemExit(
-        "Katoy Browser needs python3-pyqt6.qtwebengine "
-        "(sudo apt install python3-pyqt6.qtwebengine)."
+        "Katoy Browser requires python3-pyqt6 (sudo apt install python3-pyqt6)."
     ) from exc
+
+try:
+    from PyQt6.QtWebEngineWidgets import QWebEngineView
+    HAS_WEBENGINE = True
+except ImportError:
+    HAS_WEBENGINE = False
 
 
 STYLE = Path("/usr/share/katoyos/win11/katoy-win11.qss")
-HOME = "https://duckduckgo.com/"
+HOME = "https://duckduckgo.com/html/" if not HAS_WEBENGINE else "https://duckduckgo.com/"
 
 
 def tool_button(icon_name, tip):
@@ -36,22 +39,156 @@ def tool_button(icon_name, tip):
     return btn
 
 
+def find_system_browser():
+    candidates = ["falkon", "chromium", "chromium-browser", "firefox-esr", "firefox", "x-www-browser", "sensible-browser"]
+    for c in candidates:
+        path = shutil.which(c)
+        if path:
+            return path
+    return None
+
+
+class PageLoaderThread(QThread):
+    finished_page = pyqtSignal(str, str)
+
+    def __init__(self, url):
+        super().__init__()
+        self.url = url
+
+    def run(self):
+        try:
+            parsed = urllib.parse.urlparse(self.url)
+            if parsed.scheme == "file":
+                filepath = Path(parsed.path)
+                if filepath.exists():
+                    content = filepath.read_text(errors="ignore")
+                    self.finished_page.emit(self.url, content)
+                    return
+                raise FileNotFoundError(f"File not found: {parsed.path}")
+
+            req = urllib.request.Request(
+                self.url,
+                headers={"User-Agent": "Mozilla/5.0 (X11; Linux armv7l) AppleWebKit/537.36 KatoyBrowser/1.0"}
+            )
+            with urllib.request.urlopen(req, timeout=12) as resp:
+                final_url = resp.geturl()
+                charset = resp.headers.get_content_charset() or "utf-8"
+                content = resp.read().decode(charset, errors="ignore")
+                self.finished_page.emit(final_url, content)
+        except Exception as e:
+            err_html = f"""
+            <div style="font-family: sans-serif; padding: 40px; color: #ffffff; background: #202020;">
+                <h2 style="color: #60cdff; margin-bottom: 12px;">Failed to load page</h2>
+                <p style="color: #c5c5c5;"><b>URL:</b> {self.url}</p>
+                <p style="color: #ef4444;"><b>Error:</b> {e}</p>
+                <hr style="border: 0; border-top: 1px solid #3a3a3a; margin: 20px 0;"/>
+                <p><a href="https://duckduckgo.com/html/" style="color: #60cdff; text-decoration: none;">&larr; Return to Search</a></p>
+            </div>
+            """
+            self.finished_page.emit(self.url, err_html)
+
+
+class FallbackWebView(QTextBrowser):
+    urlChanged = pyqtSignal(QUrl)
+    loadStarted = pyqtSignal()
+    loadFinished = pyqtSignal(bool)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setOpenExternalLinks(False)
+        self.setOpenLinks(False)
+        self.anchorClicked.connect(self.on_anchor_clicked)
+        self._history = []
+        self._history_idx = -1
+        self._current_url = ""
+        self._worker = None
+
+    def on_anchor_clicked(self, qurl):
+        url_str = qurl.toString()
+        resolved = urllib.parse.urljoin(self._current_url, url_str)
+        self.setUrl(QUrl(resolved))
+
+    def setUrl(self, qurl):
+        url_str = qurl.toString()
+        if not url_str:
+            return
+
+        if self._history_idx == -1 or self._history[self._history_idx] != url_str:
+            self._history = self._history[:self._history_idx + 1]
+            self._history.append(url_str)
+            self._history_idx = len(self._history) - 1
+
+        self._current_url = url_str
+        self.urlChanged.emit(QUrl(url_str))
+        self.load_url(url_str)
+
+    def load_url(self, url_str):
+        self.loadStarted.emit()
+        self.setHtml(f"<div style='font-family: sans-serif; color: #9d9d9d; padding: 30px;'>Loading {url_str}...</div>")
+        if self._worker and self._worker.isRunning():
+            self._worker.terminate()
+            self._worker.wait()
+        self._worker = PageLoaderThread(url_str)
+        self._worker.finished_page.connect(self.on_page_loaded)
+        self._worker.start()
+
+    def on_page_loaded(self, final_url, html):
+        self._current_url = final_url
+        self.urlChanged.emit(QUrl(final_url))
+        self.setHtml(html)
+        self.loadFinished.emit(True)
+
+    def back(self):
+        if self._history_idx > 0:
+            self._history_idx -= 1
+            url_str = self._history[self._history_idx]
+            self._current_url = url_str
+            self.urlChanged.emit(QUrl(url_str))
+            self.load_url(url_str)
+
+    def forward(self):
+        if self._history_idx < len(self._history) - 1:
+            self._history_idx += 1
+            url_str = self._history[self._history_idx]
+            self._current_url = url_str
+            self.urlChanged.emit(QUrl(url_str))
+            self.load_url(url_str)
+
+    def reload(self):
+        if self._current_url:
+            self.load_url(self._current_url)
+
+
 class BrowserWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Katoy Browser")
         self.resize(1200, 800)
-
         self.setWindowIcon(QIcon.fromTheme("web-browser"))
-        self.view = QWebEngineView()
+
+        if HAS_WEBENGINE:
+            self.view = QWebEngineView()
+        else:
+            self.view = FallbackWebView()
 
         self.back_btn = tool_button("go-previous", "Back")
         self.forward_btn = tool_button("go-next", "Forward")
         self.reload_btn = tool_button("view-refresh", "Reload")
         self.home_btn = tool_button("go-home", "Home")
+
+        self.external_btn = tool_button("applications-internet", "Open in system browser")
+        self.external_browser = find_system_browser()
+        self.external_btn.setVisible(self.external_browser is not None)
+        self.external_btn.clicked.connect(self.open_external)
+
         self.url_bar = QLineEdit()
         self.url_bar.setPlaceholderText("Search or enter address")
         self.url_bar.returnPressed.connect(self.load_from_bar)
+
+        self.progress_bar = QProgressBar()
+        self.progress_bar.setFixedHeight(2)
+        self.progress_bar.setTextVisible(False)
+        self.progress_bar.setVisible(False)
 
         self.back_btn.clicked.connect(self.view.back)
         self.forward_btn.clicked.connect(self.view.forward)
@@ -64,17 +201,34 @@ class BrowserWindow(QMainWindow):
         for btn in (self.back_btn, self.forward_btn, self.reload_btn, self.home_btn):
             nav.addWidget(btn)
         nav.addWidget(self.url_bar, 1)
+        if self.external_browser:
+            nav.addWidget(self.external_btn)
 
         central = QWidget()
         layout = QVBoxLayout(central)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
         layout.addLayout(nav)
+        layout.addWidget(self.progress_bar)
         layout.addWidget(self.view)
         self.setCentralWidget(central)
 
         self.view.urlChanged.connect(self.update_url_bar)
-        self.load(HOME)
+        if hasattr(self.view, "loadProgress"):
+            self.view.loadProgress.connect(self.on_load_progress)
+        elif hasattr(self.view, "loadStarted") and hasattr(self.view, "loadFinished"):
+            self.view.loadStarted.connect(lambda: self.progress_bar.setVisible(True))
+            self.view.loadFinished.connect(lambda _: self.progress_bar.setVisible(False))
+
+        initial_url = sys.argv[1] if len(sys.argv) > 1 and not sys.argv[1].startswith("-") else HOME
+        self.load(initial_url)
+
+    def on_load_progress(self, progress):
+        if progress < 100:
+            self.progress_bar.setVisible(True)
+            self.progress_bar.setValue(progress)
+        else:
+            self.progress_bar.setVisible(False)
 
     def normalize_url(self, text):
         value = text.strip()
@@ -85,12 +239,21 @@ class BrowserWindow(QMainWindow):
             return value
 
         if value.startswith("localhost") or value.startswith("127.0.0.1"):
-            return "https://" + value
+            return "http://" + value
 
-        if "." in value or value.startswith("/"):
-            return "https://" + value
+        if value.startswith("/") or value.startswith("file:"):
+            return "file://" + os.path.abspath(value.removeprefix("file://"))
 
-        return "https://duckduckgo.com/?q=" + urllib.parse.quote(value)
+        # Check if text looks like a domain name (no whitespace, valid TLD / host pattern)
+        if not re.search(r"\s", value):
+            domain_match = re.match(r"^([a-zA-Z0-9-]+\.)+[a-zA-Z]{2,}(:\d+)?(/.*)?$", value)
+            ip_match = re.match(r"^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}(:\d+)?(/.*)?$", value)
+            if domain_match or ip_match:
+                return "https://" + value
+
+        # Search query fallback
+        search_base = "https://duckduckgo.com/html/?q=" if not HAS_WEBENGINE else "https://duckduckgo.com/?q="
+        return search_base + urllib.parse.quote(value)
 
     def load_from_bar(self):
         self.load(self.url_bar.text())
@@ -104,6 +267,12 @@ class BrowserWindow(QMainWindow):
 
     def update_url_bar(self, url):
         self.url_bar.setText(url.toString())
+
+    def open_external(self):
+        if not self.external_browser:
+            return
+        current = self.url_bar.text().strip() or HOME
+        subprocess.Popen([self.external_browser, current])
 
 
 if __name__ == "__main__":

@@ -178,8 +178,15 @@ if dpkg -s userconf-pi >/dev/null 2>&1; then
 	echo "ERROR: userconf-pi is still installed; first-boot user setup can prompt."
 	exit 1
 fi
-if ! debconf-get-selections | awk '$1 == "debconf" && $2 == "debconf/frontend" && $4 == "Noninteractive" { found=1 } END { exit !found }'; then
-	echo "ERROR: debconf frontend is not persistently set to Noninteractive."
+# Prefer the requested debconf-get-selections check; fall back to debconf's built-in query
+# when debconf-utils (which provides debconf-get-selections) is not installed in the image.
+if command -v debconf-get-selections >/dev/null 2>&1; then
+	frontend=$(debconf-get-selections | awk '$1 == "debconf" && $2 == "debconf/frontend" { print $4; exit }')
+else
+	frontend=$(printf 'GET debconf/frontend\\n' | debconf-communicate debconf | awk '$1 == "0" { $1=""; sub(/^[[:space:]]+/, ""); print; exit }')
+fi
+if [ "$frontend" != "Noninteractive" ]; then
+	echo "ERROR: debconf frontend is not persistently set to Noninteractive (found: $frontend)."
 	exit 1
 fi
 apt-get clean

@@ -15,7 +15,7 @@ case "${1:-}" in
 	set-wifi-country)
 		cc="${2:-}"
 		[[ "$cc" =~ ^[A-Z]{2}$ ]] || { echo "bad country" >&2; exit 1; }
-		raspi-config nonint do_wifi_country "$cc" ;;
+		env DEBIAN_FRONTEND=noninteractive raspi-config nonint do_wifi_country "$cc" ;;
 	set-keyboard)
 		kb="${2:-}"
 		[[ "$kb" =~ ^[a-z0-9_]+$ ]] || { echo "bad layout" >&2; exit 1; }

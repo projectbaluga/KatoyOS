@@ -147,7 +147,7 @@ These controls cover the package-management paths configured by KatoyOS; they do
 
 ## Custom KatoyOS Tools
 
-- **`katoy-karaoke`** (`/usr/bin/katoy-karaoke`): Fullscreen PyQt6 Pinoy videoke MIDI/KAR player.
+- **`katoy-karaoke`** (`/usr/bin/katoy-karaoke`): Fullscreen PyQt6 KaraOkePi MIDI/KAR player.
 - **`katoy-karaoke-launcher`** (`/usr/bin/katoy-karaoke-launcher`): Prepares and launches the player session.
 - **`katoy-karaoke-session`** (`/usr/bin/katoy-karaoke-session`): Session support for the karaoke appliance.
 - **`katoy-karaoke.service`** (`/etc/systemd/system/katoy-karaoke.service`): Starts and supervises the tty1 kiosk session.

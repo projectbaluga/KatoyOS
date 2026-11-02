@@ -13,7 +13,7 @@ with open(SCRIPT_PATH, "r", encoding="utf-8") as f:
 
 def test_wifi_qr_payload_escapes_specials():
     f = kk["wifi_qr_payload"]
-    assert f("KatoyOS-Karaoke", "katoyos123") == "WIFI:T:WPA;S:KatoyOS-Karaoke;P:katoyos123;;"
+    assert f("KaraOkePi", "katoyos123") == "WIFI:T:WPA;S:KaraOkePi;P:katoyos123;;"
     assert f("a;b", 'p:"x,y\\') == 'WIFI:T:WPA;S:a\\;b;P:p\\:\\"x\\,y\\\\;;'
 
 
@@ -130,3 +130,48 @@ def test_service_unit_has_no_ordering_cycle_and_a_login_session():
     assert not any("graphical.target" in l for l in after)
     assert "PAMName=login" in unit
     assert "Conflicts=getty@tty1.service" in unit
+
+
+def test_captive_portal_redirection_and_hotspot_routing():
+    RemoteRequestHandler = kk["RemoteRequestHandler"]
+
+    class MockApp:
+        net_ap = True
+        net_ip = "10.42.0.1"
+        config = {"REMOTE_PORT": "8080"}
+
+    class DummyHandler(RemoteRequestHandler):
+        def __init__(self, path, headers=None):
+            self.path = path
+            self.headers = headers or {}
+            self.app_instance = MockApp()
+            self.responses = []
+            self.header_list = {}
+            self.wfile = io.BytesIO()
+            self.do_GET()
+
+        def send_response(self, code):
+            self.responses.append(code)
+
+        def send_header(self, k, v):
+            self.header_list[k] = v
+
+        def end_headers(self):
+            pass
+
+    import io
+
+    # Test probe redirect points to http://<ip>:<port>/
+    h = DummyHandler("/generate_204", {"Host": "connectivitycheck.gstatic.com"})
+    assert 302 in h.responses
+    assert h.header_list.get("Location") == "http://10.42.0.1:8080/"
+
+    # Test unknown path redirect during hotspot mode
+    h_unknown = DummyHandler("/some/random/url", {"Host": "example.com"})
+    assert 302 in h_unknown.responses
+    assert h_unknown.header_list.get("Location") == "http://10.42.0.1:8080/"
+
+    # Test root during hotspot mode serves wifi setup page (200)
+    h_root = DummyHandler("/")
+    assert 200 in h_root.responses
+    assert b"KaraOkePi Wi-Fi Setup" in h_root.wfile.getvalue()

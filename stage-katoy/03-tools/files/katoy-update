@@ -2,7 +2,7 @@
 set -e
 export DEBIAN_FRONTEND=noninteractive
 
-echo "=== KatoyOS System Updater ===
+echo "=== KatoyOS System Updater ==="
 
 # Check if OverlayFS read-only root is active
 if grep -q "overlay" /proc/mounts; then

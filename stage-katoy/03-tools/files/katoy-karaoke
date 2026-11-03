@@ -423,7 +423,7 @@ def check_and_trigger_wifi_hotspot(config):
         existing_profiles = [ln.strip() for ln in show_res.stdout.splitlines()]
 
         if con_name not in existing_profiles:
-            # Create persistent shared AP profile
+            # Create persistent shared AP profile with qualified property names
             add_res = subprocess.run(
                 [
                     "nmcli", "connection", "add",
@@ -433,8 +433,10 @@ def check_and_trigger_wifi_hotspot(config):
                     "autoconnect", "yes",
                     "ssid", ssid,
                     "mode", "ap",
-                    "band", "bg",
-                    "channel", "6",
+                    "wifi.ssid", ssid,
+                    "wifi.mode", "ap",
+                    "wifi.band", "bg",
+                    "wifi.channel", "6",
                     "ipv4.method", "shared",
                     "ipv4.addresses", "10.42.0.1/24",
                     "wifi-sec.key-mgmt", "wpa-psk",
@@ -476,7 +478,20 @@ def get_nm_state():
 
 
 def is_hotspot_active():
-    """True while NetworkManager's AP hotspot (KaraOkePi-AP, KaraokePi-AP, or Hotspot) is active."""
+    """True while NetworkManager's AP hotspot (KaraOkePi-AP, KaraokePi-AP, or Hotspot) or an AP interface is active."""
+    # Check systemctl or interface type AP
+    try:
+        iw_res = subprocess.run(["iw", "dev"], capture_output=True, text=True, timeout=3)
+        if "type AP" in iw_res.stdout:
+            return True
+    except Exception:
+        pass
+    try:
+        svc_res = subprocess.run(["systemctl", "is-active", "--quiet", "katoy-ap.service"], timeout=3)
+        if svc_res.returncode == 0:
+            return True
+    except Exception:
+        pass
     if not shutil.which("nmcli"):
         return False
     try:

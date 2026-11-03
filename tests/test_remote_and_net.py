@@ -190,17 +190,18 @@ def test_captive_portal_redirection_and_hotspot_routing():
     h_unknown_no_ap = DummyHandler("/some/random/url", {"Host": "example.com"}, is_ap=False, client_addr=("192.168.1.15", 54321))
     assert 404 in h_unknown_no_ap.responses
 
-    # Test root during hotspot mode serves REMOTE_HTML (full remote UI with Wi-Fi link)
+    # Test root during hotspot mode serves REMOTE_HTML (full remote UI with Settings link)
     h_root = DummyHandler("/")
     assert 200 in h_root.responses
     assert b"KaraOkePi Remote" in h_root.wfile.getvalue()
-    assert b"/wifi" in h_root.wfile.getvalue()
+    assert b"/settings" in h_root.wfile.getvalue()
 
-    # Test Wi-Fi setup page has link back to remote
-    h_wifi = DummyHandler("/wifi")
-    assert 200 in h_wifi.responses
-    assert b"KaraOkePi Wi-Fi Setup" in h_wifi.wfile.getvalue()
-    assert b"Remote" in h_wifi.wfile.getvalue()
+    # Test Settings page has link back to remote and form fields
+    h_settings = DummyHandler("/settings")
+    assert 200 in h_settings.responses
+    assert b"KaraOkePi Settings" in h_settings.wfile.getvalue()
+    assert b"Remote" in h_settings.wfile.getvalue()
+    assert b"HOTSPOT_SSID" in h_settings.wfile.getvalue()
 
     # Test /api/* reachable on AP interface even if REMOTE_PIN is set
     h_api = DummyHandler("/api/state", client_addr=("10.0.0.5", 1234), pin="9999")

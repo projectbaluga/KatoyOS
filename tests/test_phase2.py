@@ -78,21 +78,39 @@ def test_parse_nmcli_wifi_list():
     assert parse_fn("") == []
 
 
-def test_wifi_setup_route_alias():
-    # Verify that RemoteRequestHandler handles both /wifi and /setup routes
+def test_remote_settings_page_and_update():
+    # Verify that RemoteRequestHandler serves /settings and applies config updates
     import io
+    import json
 
     handler = kk["RemoteRequestHandler"]
 
-    def create_mock_handler(target_path):
+    class MockApp:
+        def __init__(self):
+            self.config = {
+                "HOTSPOT_SSID": "KaraOkePi",
+                "HOTSPOT_PASSWORD": "katoyos123",
+                "MIC_VOLUME": "80",
+                "MUSIC_VOLUME": "100",
+                "MIC_ENABLED": "1",
+                "MIC_REVERB": "0",
+                "SCORING_MODE": "real",
+                "REMOTE_PIN": ""
+            }
+            self.mic_manager = None
+
+    def create_mock_handler(target_path, client_addr=("10.0.0.42", 1234)):
         class DummyHandler(handler):
             def __init__(self, path):
                 self.path = path
                 self.wfile = io.BytesIO()
                 self.rfile = io.BytesIO()
+                self.headers = {}
                 self.response_code = None
-                self.app_instance = None
+                self.app_instance = MockApp()
                 self.bridge_signals = None
+                self.client_address = client_addr
+                self.pin = ""
 
             def send_response(self, code, message=None):
                 self.response_code = code
@@ -105,65 +123,20 @@ def test_wifi_setup_route_alias():
 
         return DummyHandler(target_path)
 
-    h_wifi = create_mock_handler("/wifi")
-    h_wifi.do_GET()
-    assert h_wifi.response_code == 200
-    assert b"KaraOkePi Wi-Fi Setup" in h_wifi.wfile.getvalue()
+    h_settings = create_mock_handler("/settings")
+    h_settings.do_GET()
+    assert h_settings.response_code == 200
+    assert b"KaraOkePi Settings" in h_settings.wfile.getvalue()
+    assert b"HOTSPOT_SSID" in h_settings.wfile.getvalue()
 
-    h_setup = create_mock_handler("/setup")
-    h_setup.do_GET()
-    assert h_setup.response_code == 200
-    assert b"KaraOkePi Wi-Fi Setup" in h_setup.wfile.getvalue()
-
-
-def test_wifi_status_endpoint():
-    # Verify that /wifi/status and /api/wifi-status serve persisted status or pending
-    import io
-    from pathlib import Path
-
-    handler = kk["RemoteRequestHandler"]
-
-    def create_mock_handler(target_path):
-        class DummyHandler(handler):
-            def __init__(self, path):
-                self.path = path
-                self.wfile = io.BytesIO()
-                self.rfile = io.BytesIO()
-                self.response_code = None
-                self.app_instance = None
-                self.bridge_signals = None
-
-            def send_response(self, code, message=None):
-                self.response_code = code
-
-            def send_header(self, keyword, value):
-                pass
-
-            def end_headers(self):
-                pass
-
-        return DummyHandler(target_path)
-
-    # Test when no status file exists
-    status_file = Path("/tmp/katoy-wifi-status.json")
-    if status_file.exists():
-        status_file.unlink()
-
-    h_pending = create_mock_handler("/wifi/status")
-    h_pending.do_GET()
-    assert h_pending.response_code == 200
-    assert b"pending" in h_pending.wfile.getvalue()
-
-    # Test when status file exists
-    try:
-        status_file.write_text('{"status":"ok","connected":true,"ssid":"TestNet"}', encoding="utf-8")
-        h_ok = create_mock_handler("/api/wifi-status")
-        h_ok.do_GET()
-        assert h_ok.response_code == 200
-        assert b"TestNet" in h_ok.wfile.getvalue()
-    finally:
-        if status_file.exists():
-            status_file.unlink()
+    # Test updating settings
+    h_update = create_mock_handler("/settings?HOTSPOT_SSID=NewParty&MIC_VOLUME=90")
+    h_update.do_GET()
+    assert h_update.response_code == 200
+    res = json.loads(h_update.wfile.getvalue().decode("utf-8"))
+    assert res.get("status") == "ok"
+    assert h_update.app_instance.config["HOTSPOT_SSID"] == "NewParty"
+    assert h_update.app_instance.config["MIC_VOLUME"] == "90"
 
 
 def test_parse_systemd_analyze_output():

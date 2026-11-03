@@ -679,7 +679,7 @@ button.m{border:0;color:#052e22;background:linear-gradient(90deg,var(--mint),var
 </style></head><body><div class="wrap">
 <header>
  <div class="brand"><div class="logo">&#127908;</div><h1>KaraOkePi Remote</h1></div>
- <a class="nav-link" id="wifi_link" href="/wifi">&#128246; Wi-Fi</a>
+ <a class="nav-link" id="settings_link" href="/settings">&#9881;&#65039; Settings</a>
 </header>
 
 <div class="card np"><div class="lbl">NOW SINGING</div>
@@ -700,7 +700,7 @@ button.m{border:0;color:#052e22;background:linear-gradient(90deg,var(--mint),var
 <div id="toast"></div></div>
 <script>
 const PIN=new URLSearchParams(location.search).get('pin')||'';
-if(PIN){const wl=document.getElementById('wifi_link');if(wl)wl.href='/wifi?pin='+encodeURIComponent(PIN)}
+if(PIN){const sl=document.getElementById('settings_link');if(sl)sl.href='/settings?pin='+encodeURIComponent(PIN)}
 const $=s=>document.querySelector(s);
 const esc=s=>String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 async function api(p){const u=p+(PIN?(p.includes('?')?'&':'?')+'pin='+encodeURIComponent(PIN):'');
@@ -749,51 +749,66 @@ search(true);state();setInterval(state,2000);
 
 
 
-WIFI_HTML = r"""<!DOCTYPE html>
+SETTINGS_HTML = r"""<!DOCTYPE html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="__BG_TOP__">
-<title>KaraOkePi Wi-Fi Setup</title>
+<title>KaraOkePi Settings</title>
 <style>
 __THEME_ROOT_CSS__
 *{box-sizing:border-box}
 body{margin:0;min-height:100vh;display:grid;place-items:center;padding:20px;color:var(--text);font-family:Inter,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
  background:radial-gradient(700px 420px at 0% 0%,rgba(255,46,147,.30),transparent 62%),radial-gradient(700px 460px at 100% 100%,rgba(34,211,238,.22),transparent 60%),linear-gradient(var(--bg-top),var(--bg-bottom))}
-.card{width:100%;max-width:420px;background:rgba(255,255,255,.07);border:1px solid rgba(255,255,255,.13);border-radius:24px;padding:26px}
+.card{width:100%;max-width:480px;background:rgba(255,255,255,.07);border:1px solid rgba(255,255,255,.13);border-radius:24px;padding:26px}
 header{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:14px}
 .brand{display:flex;align-items:center;gap:12px}
 .logo{width:38px;height:38px;border-radius:12px;background:linear-gradient(135deg,var(--pink),var(--violet));display:grid;place-items:center;font-size:19px}
 h2{margin:0;font-size:24px;font-weight:900;background:linear-gradient(90deg,var(--pink),var(--gold));-webkit-background-clip:text;background-clip:text;color:transparent}
 .back-link{font-size:14px;font-weight:800;color:var(--text);text-decoration:none;background:rgba(255,255,255,.1);border:1px solid rgba(255,255,255,.16);padding:8px 14px;border-radius:999px;transition:background .2s}
 .back-link:hover{background:rgba(255,255,255,.18);border-color:var(--cyan)}
-p{color:var(--muted);margin:0 0 18px}label{display:block;font-weight:700;font-size:13px;letter-spacing:.08em;color:var(--muted);margin:14px 0 6px}
-select,input,button{width:100%;font:inherit;font-size:17px;color:#fff;border-radius:16px;padding:14px 16px;border:2px solid rgba(255,255,255,.16);background:rgba(255,255,255,.09);outline:none}
-select option{color:#000}input:focus,select:focus{border-color:var(--cyan)}
-button{margin-top:20px;border:0;font-weight:800;background:linear-gradient(90deg,var(--mint),var(--cyan));color:#052e22;cursor:pointer}
-#msg{margin-top:14px;font-weight:700;min-height:22px}
+p{color:var(--muted);margin:0 0 18px}
+label{display:block;font-weight:700;font-size:13px;letter-spacing:.08em;color:var(--muted);margin:14px 0 6px}
+select,input{width:100%;font:inherit;font-size:16px;color:#fff;border-radius:14px;padding:12px 14px;border:2px solid rgba(255,255,255,.16);background:rgba(255,255,255,.09);outline:none}
+select option{color:#000}
+input:focus,select:focus{border-color:var(--cyan)}
+button{width:100%;margin-top:22px;border:0;font-weight:800;background:linear-gradient(90deg,var(--mint),var(--cyan));color:#052e22;padding:14px 16px;font-size:16px;border-radius:14px;cursor:pointer}
+#msg{margin-top:14px;font-weight:700;min-height:22px;text-align:center}
 </style></head><body><div class="card">
 <header>
- <div class="brand"><div class="logo">&#127908;</div><h2>KaraOkePi</h2></div>
+ <div class="brand"><div class="logo">&#127908;</div><h2>Settings</h2></div>
  <a class="back-link" id="remote_link" href="/">&#127908; Remote</a>
 </header>
-<p>Pick your home network so the karaoke box can go online.</p>
-<label for="ssid">NETWORK</label><select id="ssid">__SSID_OPTIONS__</select>
-<label for="pass">PASSWORD</label><input type="password" id="pass" placeholder="Wi-Fi password" autocomplete="off">
-<button id="go">Connect</button><div id="msg"></div></div>
+<p>Configure KaraOkePi playback, audio, and Wi-Fi hotspot options.</p>
+<form id="f">
+<label for="HOTSPOT_SSID">Wi-Fi Hotspot SSID</label><input type="text" id="HOTSPOT_SSID" name="HOTSPOT_SSID" value="__HOTSPOT_SSID__" required>
+<label for="HOTSPOT_PASSWORD">Wi-Fi Hotspot Password</label><input type="text" id="HOTSPOT_PASSWORD" name="HOTSPOT_PASSWORD" value="__HOTSPOT_PASSWORD__" required minlength="8">
+<label for="REMOTE_PIN">Remote PIN (leave blank for none)</label><input type="text" id="REMOTE_PIN" name="REMOTE_PIN" value="__REMOTE_PIN__">
+<label for="MIC_VOLUME">Microphone Volume (0-100)</label><input type="number" id="MIC_VOLUME" name="MIC_VOLUME" min="0" max="100" value="__MIC_VOLUME__">
+<label for="MUSIC_VOLUME">Music Volume (0-100)</label><input type="number" id="MUSIC_VOLUME" name="MUSIC_VOLUME" min="0" max="100" value="__MUSIC_VOLUME__">
+<label for="MIC_ENABLED">Microphone Input</label><select id="MIC_ENABLED" name="MIC_ENABLED">__MIC_ENABLED_OPTS__</select>
+<label for="MIC_REVERB">Microphone Reverb</label><select id="MIC_REVERB" name="MIC_REVERB">__MIC_REVERB_OPTS__</select>
+<label for="SCORING_MODE">Scoring Mode</label><select id="SCORING_MODE" name="SCORING_MODE">__SCORING_MODE_OPTS__</select>
+<button type="submit" id="save_btn">Save Settings</button>
+<div id="msg"></div>
+</form>
+</div>
 <script>
 const PIN=new URLSearchParams(location.search).get('pin')||'';
 if(PIN){const rl=document.getElementById('remote_link');if(rl)rl.href='/?pin='+encodeURIComponent(PIN)}
-document.getElementById('go').addEventListener('click',async()=>{
- const s=document.getElementById('ssid').value,p=document.getElementById('pass').value,m=document.getElementById('msg');
- if(!s){m.textContent='Please pick a network';return}
- m.textContent='Connecting… this phone may lose the hotspot for a moment.';
- let u='/wifi?ssid='+encodeURIComponent(s)+'&password='+encodeURIComponent(p)+(PIN?'&pin='+encodeURIComponent(PIN):'');
- try{const d=await (await fetch(u)).json();m.textContent=d.msg||d.error}catch(e){m.textContent='Applied. If the hotspot disappeared, the box is joining your Wi-Fi.'}
- // The phone usually drops off the hotspot mid-request; if it is still reachable, report the real outcome.
- for(let i=0;i<20;i++){await new Promise(r=>setTimeout(r,2000));
-  try{const s=await (await fetch('/wifi/status')).json();
-   if(s.status==='ok'){m.textContent='Connected to '+s.ssid+'. Reconnect your phone to your normal Wi-Fi.';return}
-   if(s.status==='error'){m.textContent='Could not join '+s.ssid+'. Check the password and try again.';return}}catch(e){}}
+document.getElementById('f').addEventListener('submit',async(e)=>{
+ e.preventDefault();
+ const m=document.getElementById('msg'),btn=document.getElementById('save_btn');
+ btn.disabled=true;m.textContent='Applying settings...';
+ const fd=new FormData(e.target);
+ const p=new URLSearchParams();
+ for(const [k,v] of fd.entries())p.append(k,v);
+ if(PIN)p.append('pin',PIN);
+ try{
+  const r=await fetch('/settings?'+p.toString(),{method:'POST'});
+  const d=await r.json();
+  m.textContent=d.msg||d.error||'Settings saved.';
+ }catch(err){m.textContent='Error applying settings: '+err;}
+ btn.disabled=false;
 });
 </script></body></html>""".replace('__THEME_ROOT_CSS__', THEME_ROOT_CSS).replace('__BG_TOP__', HEX_BG_TOP)
 
@@ -838,17 +853,134 @@ class RemoteRequestHandler(BaseHTTPRequestHandler):
         self.send_header("Connection", "close")
         self.end_headers()
 
-    def _serve_wifi_setup_page(self):
-        wifi_out = ""
-        if shutil.which("nmcli"):
+    def do_POST(self):
+        parsed = urllib.parse.urlparse(self.path)
+        path = parsed.path
+        length = int(self.headers.get("Content-Length", 0))
+        body = self.rfile.read(length).decode("utf-8") if length > 0 else ""
+        params = urllib.parse.parse_qs(body)
+        for k, v in urllib.parse.parse_qs(parsed.query).items():
+            if k not in params:
+                params[k] = v
+
+        app = self.app_instance
+        hotspot_active = is_hotspot_active() or bool(app and getattr(app, "net_ap", False))
+        client_ip = self.client_address[0] if hasattr(self, "client_address") and self.client_address else ""
+        is_ap_client = client_ip.startswith("10.0.0.") or client_ip.startswith("10.42.0.") or client_ip == "127.0.0.1" or (hotspot_active and not client_ip)
+
+        if self.pin and not is_ap_client and params.get("pin", [""])[0] != self.pin:
+            self.send_json({"error": "Unauthorized / Invalid PIN"}, 401)
+            return
+
+        if path == "/settings":
+            self._apply_settings_update(params)
+        else:
+            self.send_json({"error": "Not Found"}, 404)
+
+    def _apply_settings_update(self, params):
+        app = self.app_instance
+        cfg = app.config if (app and hasattr(app, "config")) else {}
+        changed = {}
+        restart_hotspot = False
+
+        for key in ("HOTSPOT_SSID", "HOTSPOT_PASSWORD", "REMOTE_PIN", "MIC_VOLUME", "MUSIC_VOLUME", "MIC_ENABLED", "MIC_REVERB", "SCORING_MODE"):
+            if key in params:
+                val = params[key][0].strip()
+                if key in ("MIC_VOLUME", "MUSIC_VOLUME"):
+                    try:
+                        val = str(max(0, min(100, int(val))))
+                    except ValueError:
+                        continue
+                if key in ("HOTSPOT_SSID", "HOTSPOT_PASSWORD") and cfg.get(key) != val:
+                    restart_hotspot = True
+                cfg[key] = val
+                changed[key] = val
+
+        # Persist to USB config if mounted, otherwise /etc/katoyos/karaoke.conf
+        usb_dir = getattr(app, "songs_dir", "") if app else ""
+        target_conf = None
+        if usb_dir:
+            u_path = Path(usb_dir)
+            usb_root = u_path.parent if u_path.name in ("songs", "karaoke", "midi", "kar", "SONGS", "KARAOKE", "MIDI", "KAR") else u_path
+            for name in (".katoy-karaoke.conf", "karaoke.conf", "katoy-karaoke.conf"):
+                if (usb_root / name).is_file():
+                    target_conf = usb_root / name
+                    break
+            if not target_conf and usb_root.is_dir():
+                target_conf = usb_root / ".katoy-karaoke.conf"
+        if not target_conf:
+            target_conf = CONFIG_FILE
+
+        if target_conf:
             try:
-                res = subprocess.run(["nmcli", "-t", "-f", "SSID,SIGNAL,SECURITY", "device", "wifi", "list"], capture_output=True, text=True)
-                wifi_out = res.stdout
-            except Exception:
-                pass
-        ssids = parse_nmcli_wifi_list(wifi_out)
-        opts = "".join(f"<option value='{html.escape(s, quote=True)}'>{html.escape(s)}</option>" for s in ssids)             if ssids else "<option value=''>No networks found</option>"
-        self.send_html(WIFI_HTML.replace("__SSID_OPTIONS__", opts))
+                lines = []
+                if target_conf.is_file():
+                    lines = target_conf.read_text(encoding="utf-8").splitlines()
+                written_keys = set()
+                new_lines = []
+                for line in lines:
+                    stripped = line.strip()
+                    if stripped and not stripped.startswith("#") and "=" in stripped:
+                        k = stripped.split("=", 1)[0].strip()
+                        if k in changed:
+                            new_lines.append(f"{k}={changed[k]}")
+                            written_keys.add(k)
+                            continue
+                    new_lines.append(line)
+                for k, v in changed.items():
+                    if k not in written_keys:
+                        new_lines.append(f"{k}={v}")
+                target_conf.write_text("\n".join(new_lines) + "\n", encoding="utf-8")
+            except Exception as e:
+                print(f"Error saving config to {target_conf}: {e}")
+
+        # Apply live changes
+        if app and hasattr(app, "mic_manager") and app.mic_manager:
+            try:
+                if "MIC_VOLUME" in changed:
+                    app.mic_manager.set_mic_volume(int(changed["MIC_VOLUME"]))
+                if "MUSIC_VOLUME" in changed:
+                    app.mic_manager.set_music_volume(int(changed["MUSIC_VOLUME"]))
+                if "MIC_ENABLED" in changed or "MIC_REVERB" in changed:
+                    app.mic_manager.mic_enabled = (cfg.get("MIC_ENABLED", "1") == "1")
+                    app.mic_manager.reverb_enabled = (cfg.get("MIC_REVERB", "0") == "1")
+                    app.mic_manager.apply_settings()
+            except Exception as e:
+                print(f"Error applying audio settings: {e}")
+
+        if restart_hotspot:
+            try:
+                subprocess.Popen(["systemctl", "restart", "katoy-ap.service"])
+            except Exception as e:
+                print(f"Error restarting katoy-ap.service: {e}")
+
+        self.send_json({"status": "ok", "msg": "Settings saved successfully! Hotspot restarted." if restart_hotspot else "Settings saved successfully!"})
+
+    def _serve_settings_page(self):
+        cfg = self.app_instance.config if (self.app_instance and hasattr(self.app_instance, "config")) else {}
+        page = SETTINGS_HTML
+        page = page.replace("__HOTSPOT_SSID__", html.escape(cfg.get("HOTSPOT_SSID", "KaraOkePi"), quote=True))
+        page = page.replace("__HOTSPOT_PASSWORD__", html.escape(cfg.get("HOTSPOT_PASSWORD", "katoyos123"), quote=True))
+        page = page.replace("__REMOTE_PIN__", html.escape(cfg.get("REMOTE_PIN", ""), quote=True))
+        page = page.replace("__MIC_VOLUME__", html.escape(str(cfg.get("MIC_VOLUME", "80")), quote=True))
+        page = page.replace("__MUSIC_VOLUME__", html.escape(str(cfg.get("MUSIC_VOLUME", "100")), quote=True))
+
+        me = str(cfg.get("MIC_ENABLED", "1"))
+        page = page.replace("__MIC_ENABLED_OPTS__",
+            f"<option value='1'{' selected' if me=='1' else ''}>Enabled</option>"
+            f"<option value='0'{' selected' if me=='0' else ''}>Disabled</option>")
+
+        mr = str(cfg.get("MIC_REVERB", "0"))
+        page = page.replace("__MIC_REVERB_OPTS__",
+            f"<option value='0'{' selected' if mr=='0' else ''}>Dry (Recommended for low CPU)</option>"
+            f"<option value='1'{' selected' if mr=='1' else ''}>Reverb</option>")
+
+        sm = str(cfg.get("SCORING_MODE", "real"))
+        page = page.replace("__SCORING_MODE_OPTS__",
+            f"<option value='real'{' selected' if sm=='real' else ''}>Real (Microphone energy)</option>"
+            f"<option value='fun'{' selected' if sm=='fun' else ''}>Fun (Random 88-100)</option>")
+
+        self.send_html(page)
 
     def do_GET(self):
         parsed = urllib.parse.urlparse(self.path)
@@ -891,9 +1023,8 @@ class RemoteRequestHandler(BaseHTTPRequestHandler):
         # are exempt from REMOTE_PIN so AP users who just joined the Wi-Fi immediately get full remote
         # and setup access without needing an unshared PIN.
 
-        setup_paths = ("/wifi", "/setup", "/wifi/status", "/api/wifi-status")
-        setup_open = path in setup_paths and hotspot_active
-        if self.pin and not setup_open and not is_ap_client and params.get("pin", [""])[0] != self.pin:
+        # /settings and API routes: accessible without PIN by AP clients (10.0.0.0/24)
+        if self.pin and not is_ap_client and params.get("pin", [""])[0] != self.pin:
             self.send_json({"error": "Unauthorized / Invalid PIN"}, 401)
             return
 
@@ -958,31 +1089,11 @@ class RemoteRequestHandler(BaseHTTPRequestHandler):
             if self.bridge_signals:
                 self.bridge_signals.toggle_pause.emit()
             self.send_json({"status": "ok"})
-        elif path in ("/wifi/status", "/api/wifi-status"):
-            status_file = Path("/tmp/katoy-wifi-status.json")
-            if status_file.exists():
-                try:
-                    data = json.loads(status_file.read_text(encoding="utf-8"))
-                    self.send_json(data)
-                except Exception:
-                    self.send_json({"status": "unknown"}, 200)
+        elif path == "/settings":
+            if any(k in params for k in ("HOTSPOT_SSID", "HOTSPOT_PASSWORD", "REMOTE_PIN", "MIC_VOLUME", "MUSIC_VOLUME", "MIC_ENABLED", "MIC_REVERB", "SCORING_MODE")):
+                self._apply_settings_update(params)
             else:
-                self.send_json({"status": "pending", "msg": "No connection attempt recorded yet"}, 200)
-        elif path in ("/wifi", "/setup"):
-            ssid = params.get("ssid", [""])[0]
-            passw = params.get("password", [""])[0]
-            if ssid:
-                try:
-                    subprocess.run(
-                        ["pkexec", "/usr/lib/katoyos/helper", "set-wifi-credentials", ssid, passw],
-                        check=True
-                    )
-                    self.send_json({"status": "ok", "msg": f"Wi-Fi credentials for {ssid} applied! Connecting..."})
-                except Exception as e:
-                    self.send_json({"error": f"Failed to connect: {e}"}, 500)
-            else:
-                # GET /wifi: serve the setup page with an SSID scan
-                self._serve_wifi_setup_page()
+                self._serve_settings_page()
         else:
             if hotspot_active or is_ap_client:
                 port = app.config.get("REMOTE_PORT", "8080") if (app and hasattr(app, "config")) else "8080"

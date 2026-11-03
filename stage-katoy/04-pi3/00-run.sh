@@ -49,6 +49,21 @@ on_chroot << 'CHEOF'
 for u in ModemManager.service triggerhappy.service e2scrub_all.timer; do
 	systemctl disable "$u" >/dev/null 2>&1 || true
 done
+
+# Ensure NetworkManager is the sole network manager; dhcpcd conflicts and marks wlan0 unmanaged
+for u in dhcpcd.service dhcpcd5.service; do
+	systemctl disable "$u" >/dev/null 2>&1 || true
+	systemctl mask "$u" >/dev/null 2>&1 || true
+done
+systemctl enable NetworkManager.service || true
+
+# Ensure wlan0 is managed by NetworkManager
+if [ -f /etc/NetworkManager/NetworkManager.conf ]; then
+	if grep -q "\[ifupdown\]" /etc/NetworkManager/NetworkManager.conf; then
+		sed -i '/^\[ifupdown\]/,/^\[/ s/managed=false/managed=true/' /etc/NetworkManager/NetworkManager.conf
+	fi
+	sed -i '/unmanaged-devices=.*wlan0/d' /etc/NetworkManager/NetworkManager.conf
+fi
 CHEOF
 
 # Keep the journal in RAM to spare the SD card

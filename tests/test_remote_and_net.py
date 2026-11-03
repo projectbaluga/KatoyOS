@@ -186,8 +186,8 @@ def test_captive_portal_redirection_and_hotspot_routing():
     assert 302 in h_unknown.responses
     assert h_unknown.header_list.get("Location") == "http://10.0.0.1:8080/"
 
-    # Test unknown path when hotspot is inactive returns 404
-    h_unknown_no_ap = DummyHandler("/some/random/url", {"Host": "example.com"}, is_ap=False)
+    # Test unknown path when hotspot is inactive and client is non-AP returns 404
+    h_unknown_no_ap = DummyHandler("/some/random/url", {"Host": "example.com"}, is_ap=False, client_addr=("192.168.1.15", 54321))
     assert 404 in h_unknown_no_ap.responses
 
     # Test root during hotspot mode serves REMOTE_HTML (full remote UI with Wi-Fi link)

@@ -5,22 +5,14 @@ Wants=NetworkManager.service
 
 [Service]
 Type=simple
-# Ensure wlan0 is not managed by NetworkManager, assign 10.0.0.1/24, and template hostapd.conf from karaoke.conf if available
-ExecStartPre=-/usr/bin/nmcli device set wlan0 managed no
-ExecStartPre=/usr/sbin/ip addr replace 10.0.0.1/24 dev wlan0
-ExecStartPre=/bin/sh -c 'if [ -f /etc/katoyos/karaoke.conf ]; then \
-    SSID=$$(grep "^HOTSPOT_SSID=" /etc/katoyos/karaoke.conf | cut -d= -f2); \
-    PASS=$$(grep "^HOTSPOT_PASSWORD=" /etc/katoyos/karaoke.conf | cut -d= -f2); \
-    [ -n "$$SSID" ] && sed -i "s/^ssid=.*/ssid=$$SSID/" /etc/katoyos/hostapd.conf; \
-    [ -n "$$PASS" ] && sed -i "s/^wpa_passphrase=.*/wpa_passphrase=$$PASS/" /etc/katoyos/hostapd.conf; \
-fi'
+# Gate execution so HOTSPOT_MODE=fallback does not restart-loop in journal
+ExecCondition=/usr/bin/katoy-ap-template check-mode
+ExecStartPre=/usr/bin/katoy-ap-template setup
 ExecStart=/usr/sbin/hostapd /etc/katoyos/hostapd.conf
-# Captive portal port 80 -> 8080 redirect
-ExecStartPost=/bin/sh -c 'nft add table ip nat 2>/dev/null || true; \
-    nft "add chain ip nat prerouting { type nat hook prerouting priority -100 ; }" 2>/dev/null || true; \
-    nft add rule ip nat prerouting iif wlan0 tcp dport 80 redirect to :8080 2>/dev/null || true'
+ExecStartPost=/usr/bin/katoy-ap-template nat
 Restart=always
 RestartSec=3s
+RestartPreventExitStatus=10
 
 [Install]
 WantedBy=multi-user.target

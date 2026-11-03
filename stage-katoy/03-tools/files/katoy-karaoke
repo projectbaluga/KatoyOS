@@ -424,7 +424,7 @@ def check_and_trigger_wifi_hotspot(config):
 
         if con_name not in existing_profiles:
             # Create persistent shared AP profile
-            subprocess.run(
+            add_res = subprocess.run(
                 [
                     "nmcli", "connection", "add",
                     "type", "wifi",
@@ -442,10 +442,16 @@ def check_and_trigger_wifi_hotspot(config):
                 ],
                 capture_output=True, text=True, timeout=10
             )
+            if add_res.returncode != 0:
+                print(f"Hotspot profile create failed: {add_res.stderr.strip()}")
+                return False, ""
 
         # Bring up profile
-        subprocess.run(["nmcli", "connection", "up", con_name],
-                       capture_output=True, text=True, timeout=10)
+        up_res = subprocess.run(["nmcli", "connection", "up", con_name],
+                                capture_output=True, text=True, timeout=10)
+        if up_res.returncode != 0:
+            print(f"Hotspot up failed: {up_res.stderr.strip()}")
+            return False, ""
         return True, ssid
     except Exception as e:
         print(f"Hotspot setup error: {e}")

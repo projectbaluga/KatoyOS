@@ -12,6 +12,8 @@ udiskie
 qterminal
 # system services
 network-manager
+# required by NetworkManager ipv4.method shared for KaraOkePi AP hotspot DHCP
+dnsmasq-base
 polkitd
 pkexec
 upower

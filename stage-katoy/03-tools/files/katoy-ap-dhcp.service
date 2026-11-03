@@ -1,0 +1,13 @@
+[Unit]
+Description=KaraOkePi Standalone AP DHCP and Wildcard DNS Server (dnsmasq)
+After=katoy-ap.service NetworkManager.service
+Requires=katoy-ap.service
+
+[Service]
+Type=simple
+ExecStart=/usr/sbin/dnsmasq -k --interface=wlan0 --bind-interfaces --dhcp-range=10.0.0.10,10.0.0.100,255.255.255.0,24h --dhcp-option=3,10.0.0.1 --dhcp-option=6,10.0.0.1 --address=/#/10.0.0.1
+Restart=always
+RestartSec=3s
+
+[Install]
+WantedBy=multi-user.target

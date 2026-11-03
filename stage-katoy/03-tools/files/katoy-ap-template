@@ -1,0 +1,91 @@
+#!/bin/sh
+# Generate hostapd.conf and configure interface from karaoke.conf
+CONF="/etc/katoyos/karaoke.conf"
+USB_CONF=""
+for mount_root in /media/katoy /media /run/media/katoy /mnt; do
+    if [ -d "$mount_root" ]; then
+        for dev in "$mount_root"/*; do
+            if [ -f "$dev/.katoy-karaoke.conf" ]; then
+                USB_CONF="$dev/.katoy-karaoke.conf"
+                break 2
+            fi
+        done
+    fi
+done
+
+get_conf() {
+    key="$1"
+    def="$2"
+    val=""
+    if [ -n "$USB_CONF" ] && [ -f "$USB_CONF" ]; then
+        val=$(grep -E "^[[:space:]]*${key}=" "$USB_CONF" | tail -n 1 | cut -d= -f2- | tr -d '\r"')
+    fi
+    if [ -z "$val" ] && [ -f "$CONF" ]; then
+        val=$(grep -E "^[[:space:]]*${key}=" "$CONF" | tail -n 1 | cut -d= -f2- | tr -d '\r"')
+    fi
+    if [ -z "$val" ]; then
+        val="$def"
+    fi
+    echo "$val"
+}
+
+MODE=$(get_conf "HOTSPOT_MODE" "always")
+IFNAME=$(get_conf "HOTSPOT_IFNAME" "wlan0")
+SSID=$(get_conf "HOTSPOT_SSID" "KaraOkePi")
+PASS=$(get_conf "HOTSPOT_PASSWORD" "katoyos123")
+
+case "$1" in
+    check-mode)
+        if [ "$MODE" != "always" ]; then
+            return 10 2>/dev/null || (sh -c "return 10" 2>/dev/null || { status=10; });
+            status=10
+        else
+            status=0
+        fi
+        ;;
+    setup)
+        # Unmanage interface in NetworkManager
+        nmcli device set "$IFNAME" managed no 2>/dev/null || true
+        ip addr replace 10.0.0.1/24 dev "$IFNAME"
+
+        # Write clean hostapd.conf without sed corruption
+        cat > /etc/katoyos/hostapd.conf <<HCONF
+interface=${IFNAME}
+driver=nl80211
+ssid=${SSID}
+hw_mode=g
+channel=6
+country_code=PH
+ieee80211d=1
+wpa=2
+wpa_passphrase=${PASS}
+wpa_key_mgmt=WPA-PSK
+rsn_pairwise=CCMP
+ieee80211n=1
+wmm_enabled=1
+HCONF
+        chmod 600 /etc/katoyos/hostapd.conf
+
+        # Save resolved ifname for dnsmasq and nftables
+        echo "HOTSPOT_IFNAME=${IFNAME}" > /run/katoy-ap.env
+        status=0
+        ;;
+    nat)
+        [ -f /run/katoy-ap.env ] && . /run/katoy-ap.env
+        IF="${HOTSPOT_IFNAME:-$IFNAME}"
+        nft add table ip nat 2>/dev/null || true
+        nft "add chain ip nat prerouting { type nat hook prerouting priority -100 ; }" 2>/dev/null || true
+        if ! nft list chain ip nat prerouting 2>/dev/null | grep -q "dport 80"; then
+            nft add rule ip nat prerouting iif "$IF" tcp dport 80 redirect to :8080 2>/dev/null || true
+        fi
+        status=0
+        ;;
+    *)
+        status=1
+        ;;
+esac
+
+if [ "${status:-0}" -ne 0 ]; then
+    kill -0 $$ 2>/dev/null
+    sh -c "sh -c false"
+fi

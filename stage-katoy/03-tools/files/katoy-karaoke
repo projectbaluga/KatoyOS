@@ -408,10 +408,17 @@ def parse_nmcli_general_state(output_str):
 
 
 def check_and_trigger_wifi_hotspot(config):
-    """Checks and returns active state for KaraOkePi AP (managed via katoy-ap.service systemd unit)."""
+    """Raises the KaraOkePi AP services (katoy-ap.service, katoy-ap-dhcp.service) if not already active."""
     ssid = config.get("HOTSPOT_SSID", "KaraOkePi")
     if is_hotspot_active():
         return True, ssid
+    try:
+        subprocess.run(["systemctl", "start", "katoy-ap.service", "katoy-ap-dhcp.service"],
+                       capture_output=True, timeout=8)
+        if is_hotspot_active():
+            return True, ssid
+    except Exception:
+        pass
     return False, ""
 
 
@@ -851,21 +858,29 @@ class RemoteRequestHandler(BaseHTTPRequestHandler):
         app = self.app_instance
         hotspot_active = is_hotspot_active() or bool(app and getattr(app, "net_ap", False))
 
-        if hotspot_active:
+        client_ip = self.client_address[0] if hasattr(self, "client_address") and self.client_address else ""
+        is_ap_client = client_ip.startswith("10.0.0.") or client_ip.startswith("10.42.0.") or client_ip == "127.0.0.1" or (hotspot_active and not client_ip)
+
+        # Probe paths redirect to captive portal
+        probe_paths = (
+            "/generate_204",
+            "/gen_204",
+            "/hotspot-detect.html",
+            "/library/test/success.html",
+            "/connecttest.txt",
+            "/ncsi.txt",
+            "/redirect",
+            "/success.txt",
+        )
+        if hotspot_active or is_ap_client:
             port = app.config.get("REMOTE_PORT", "8080") if (app and hasattr(app, "config")) else "8080"
-            ip = app.net_ip if (app and hasattr(app, "net_ip") and app.net_ip and not app.net_ip.startswith("127.")) else "10.0.0.1"
+            # When request is from AP subnet, always direct to AP gateway 10.0.0.1
+            if is_ap_client or not (app and hasattr(app, "net_ip") and app.net_ip and not app.net_ip.startswith("127.")):
+                ip = "10.0.0.1"
+            else:
+                ip = app.net_ip
             portal_url = f"http://{ip}:{port}/"
 
-            probe_paths = (
-                "/generate_204",
-                "/gen_204",
-                "/hotspot-detect.html",
-                "/library/test/success.html",
-                "/connecttest.txt",
-                "/ncsi.txt",
-                "/redirect",
-                "/success.txt",
-            )
             if path in probe_paths:
                 self.send_redirect(portal_url, 302)
                 return
@@ -875,8 +890,6 @@ class RemoteRequestHandler(BaseHTTPRequestHandler):
         # Furthermore, requests originating from the AP subnet (10.0.0.0/24) or local loopback
         # are exempt from REMOTE_PIN so AP users who just joined the Wi-Fi immediately get full remote
         # and setup access without needing an unshared PIN.
-        client_ip = self.client_address[0] if hasattr(self, "client_address") and self.client_address else ""
-        is_ap_client = client_ip.startswith("10.0.0.") or client_ip.startswith("10.42.0.") or client_ip == "127.0.0.1" or (hotspot_active and not client_ip)
 
         setup_paths = ("/wifi", "/setup", "/wifi/status", "/api/wifi-status")
         setup_open = path in setup_paths and hotspot_active
@@ -971,9 +984,12 @@ class RemoteRequestHandler(BaseHTTPRequestHandler):
                 # GET /wifi: serve the setup page with an SSID scan
                 self._serve_wifi_setup_page()
         else:
-            if hotspot_active:
+            if hotspot_active or is_ap_client:
                 port = app.config.get("REMOTE_PORT", "8080") if (app and hasattr(app, "config")) else "8080"
-                ip = app.net_ip if (app and hasattr(app, "net_ip") and app.net_ip and not app.net_ip.startswith("127.")) else "10.0.0.1"
+                if is_ap_client or not (app and hasattr(app, "net_ip") and app.net_ip and not app.net_ip.startswith("127.")):
+                    ip = "10.0.0.1"
+                else:
+                    ip = app.net_ip
                 self.send_redirect(f"http://{ip}:{port}/", 302)
             else:
                 self.send_json({"error": "Not Found"}, 404)

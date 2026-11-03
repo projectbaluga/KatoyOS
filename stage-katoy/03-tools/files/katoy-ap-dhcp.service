@@ -5,7 +5,8 @@ Requires=katoy-ap.service
 
 [Service]
 Type=simple
-ExecStart=/usr/sbin/dnsmasq -k --interface=wlan0 --bind-interfaces --dhcp-range=10.0.0.10,10.0.0.100,255.255.255.0,24h --dhcp-option=3,10.0.0.1 --dhcp-option=6,10.0.0.1 --address=/#/10.0.0.1
+EnvironmentFile=-/run/katoy-ap.env
+ExecStart=/bin/sh -c 'IF=$${HOTSPOT_IFNAME:-wlan0}; exec /usr/sbin/dnsmasq -k --interface=$$IF --bind-interfaces --dhcp-range=10.0.0.10,10.0.0.100,255.255.255.0,24h --dhcp-option=3,10.0.0.1 --dhcp-option=6,10.0.0.1 --address=/#/10.0.0.1'
 Restart=always
 RestartSec=3s
 

@@ -408,55 +408,10 @@ def parse_nmcli_general_state(output_str):
 
 
 def check_and_trigger_wifi_hotspot(config):
-    """Brings up the KaraOkePi Wi-Fi AP profile, creating a persistent connection profile if needed."""
-    if not shutil.which("nmcli"):
-        return False, ""
-    try:
-        ssid = config.get("HOTSPOT_SSID", "KaraOkePi")
-        password = config.get("HOTSPOT_PASSWORD", "katoyos123")
-        ifname = config.get("HOTSPOT_IFNAME", "wlan0")
-        con_name = "KaraOkePi-AP"
-
-        # Check existing profiles
-        show_res = subprocess.run(["nmcli", "-t", "-f", "NAME", "connection", "show"],
-                                  capture_output=True, text=True, timeout=5)
-        existing_profiles = [ln.strip() for ln in show_res.stdout.splitlines()]
-
-        if con_name not in existing_profiles:
-            # Create persistent shared AP profile with qualified property names
-            add_res = subprocess.run(
-                [
-                    "nmcli", "connection", "add",
-                    "type", "wifi",
-                    "ifname", ifname,
-                    "con-name", con_name,
-                    "autoconnect", "yes",
-                    "ssid", ssid,
-                    "mode", "ap",
-                    "wifi.ssid", ssid,
-                    "wifi.mode", "ap",
-                    "wifi.band", "bg",
-                    "wifi.channel", "6",
-                    "ipv4.method", "shared",
-                    "ipv4.addresses", "10.42.0.1/24",
-                    "wifi-sec.key-mgmt", "wpa-psk",
-                    "wifi-sec.psk", password,
-                ],
-                capture_output=True, text=True, timeout=10
-            )
-            if add_res.returncode != 0:
-                print(f"Hotspot profile create failed: {add_res.stderr.strip()}")
-                return False, ""
-
-        # Bring up profile
-        up_res = subprocess.run(["nmcli", "connection", "up", con_name],
-                                capture_output=True, text=True, timeout=10)
-        if up_res.returncode != 0:
-            print(f"Hotspot up failed: {up_res.stderr.strip()}")
-            return False, ""
+    """Checks and returns active state for KaraOkePi AP (managed via katoy-ap.service systemd unit)."""
+    ssid = config.get("HOTSPOT_SSID", "KaraOkePi")
+    if is_hotspot_active():
         return True, ssid
-    except Exception as e:
-        print(f"Hotspot setup error: {e}")
     return False, ""
 
 
@@ -568,12 +523,12 @@ class NetworkWatcher(QThread):
                         check_and_trigger_wifi_hotspot(self.config)
                         ap = is_hotspot_active()
 
-            # When AP is active, AP clients connect to 10.42.0.1;
-            # get_local_ip() will return either 10.42.0.1 or the local LAN/STA IP.
-            # If AP is active and IP returned is 127.0.0.1, fall back to 10.42.0.1.
+            # When AP is active, AP clients connect to 10.0.0.1;
+            # get_local_ip() will return either 10.0.0.1 or the local LAN/STA IP.
+            # If AP is active and IP returned is 127.0.0.1, fall back to 10.0.0.1.
             ip = get_local_ip()
             if ap and (not ip or ip.startswith("127.")):
-                ip = "10.42.0.1"
+                ip = "10.0.0.1"
 
             info = (ip, ap, ssid if ap else "")
             if info != last:
@@ -898,7 +853,7 @@ class RemoteRequestHandler(BaseHTTPRequestHandler):
 
         if hotspot_active:
             port = app.config.get("REMOTE_PORT", "8080") if (app and hasattr(app, "config")) else "8080"
-            ip = app.net_ip if (app and hasattr(app, "net_ip") and app.net_ip and not app.net_ip.startswith("127.")) else "10.42.0.1"
+            ip = app.net_ip if (app and hasattr(app, "net_ip") and app.net_ip and not app.net_ip.startswith("127.")) else "10.0.0.1"
             portal_url = f"http://{ip}:{port}/"
 
             probe_paths = (
@@ -917,11 +872,11 @@ class RemoteRequestHandler(BaseHTTPRequestHandler):
 
         # REMOTE_PIN gates the player API.
         # First-time Wi-Fi setup (/wifi, /setup, status polling) stays open while in hotspot mode.
-        # Furthermore, requests originating from the AP subnet (10.42.0.0/24) or local loopback
+        # Furthermore, requests originating from the AP subnet (10.0.0.0/24) or local loopback
         # are exempt from REMOTE_PIN so AP users who just joined the Wi-Fi immediately get full remote
         # and setup access without needing an unshared PIN.
         client_ip = self.client_address[0] if hasattr(self, "client_address") and self.client_address else ""
-        is_ap_client = client_ip.startswith("10.42.0.") or client_ip == "127.0.0.1" or (hotspot_active and not client_ip)
+        is_ap_client = client_ip.startswith("10.0.0.") or client_ip.startswith("10.42.0.") or client_ip == "127.0.0.1" or (hotspot_active and not client_ip)
 
         setup_paths = ("/wifi", "/setup", "/wifi/status", "/api/wifi-status")
         setup_open = path in setup_paths and hotspot_active
@@ -1018,7 +973,7 @@ class RemoteRequestHandler(BaseHTTPRequestHandler):
         else:
             if hotspot_active:
                 port = app.config.get("REMOTE_PORT", "8080") if (app and hasattr(app, "config")) else "8080"
-                ip = app.net_ip if (app and hasattr(app, "net_ip") and app.net_ip and not app.net_ip.startswith("127.")) else "10.42.0.1"
+                ip = app.net_ip if (app and hasattr(app, "net_ip") and app.net_ip and not app.net_ip.startswith("127.")) else "10.0.0.1"
                 self.send_redirect(f"http://{ip}:{port}/", 302)
             else:
                 self.send_json({"error": "Not Found"}, 404)
@@ -2585,7 +2540,7 @@ class KaraokeApp(QWidget):
         if ap:
             ssid = self.net_ssid or self.config.get("HOTSPOT_SSID", "KaraOkePi")
             pwd = self.config.get("HOTSPOT_PASSWORD", "katoyos123")
-            host = ip if have_ip else "10.42.0.1"
+            host = ip if have_ip else "10.0.0.1"
             self.remote_title.setText("Sing from your phone")
             self.remote_sub.setText(f"Connect your phone to '{ssid}' Wi-Fi, then scan or visit the remote.")
             self.qr_a.set_qr(wifi_qr_payload(ssid, pwd), "1 · Join Wi-Fi", 230)

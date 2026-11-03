@@ -138,7 +138,7 @@ def test_captive_portal_redirection_and_hotspot_routing():
     class MockApp:
         def __init__(self, is_ap=True):
             self.net_ap = is_ap
-            self.net_ip = "10.42.0.1"
+            self.net_ip = "10.0.0.1"
             self.config = {"REMOTE_PORT": "8080"}
             self.db = None
             self.reservation_queue = []
@@ -149,7 +149,7 @@ def test_captive_portal_redirection_and_hotspot_routing():
             self.tempo_multiplier = 1.0
 
     class DummyHandler(RemoteRequestHandler):
-        def __init__(self, path, headers=None, is_ap=True, client_addr=("10.42.0.42", 54321), pin=""):
+        def __init__(self, path, headers=None, is_ap=True, client_addr=("10.0.0.42", 54321), pin=""):
             self.path = path
             self.headers = headers or {}
             self.client_address = client_addr
@@ -174,17 +174,17 @@ def test_captive_portal_redirection_and_hotspot_routing():
     # Test probe redirect points to http://<ip>:<port>/
     h = DummyHandler("/generate_204", {"Host": "connectivitycheck.gstatic.com"})
     assert 302 in h.responses
-    assert h.header_list.get("Location") == "http://10.42.0.1:8080/"
+    assert h.header_list.get("Location") == "http://10.0.0.1:8080/"
 
     # Test iOS probe redirect
     h_ios = DummyHandler("/hotspot-detect.html", {"Host": "captive.apple.com"})
     assert 302 in h_ios.responses
-    assert h_ios.header_list.get("Location") == "http://10.42.0.1:8080/"
+    assert h_ios.header_list.get("Location") == "http://10.0.0.1:8080/"
 
     # Test unknown path redirect during hotspot mode
     h_unknown = DummyHandler("/some/random/url", {"Host": "example.com"})
     assert 302 in h_unknown.responses
-    assert h_unknown.header_list.get("Location") == "http://10.42.0.1:8080/"
+    assert h_unknown.header_list.get("Location") == "http://10.0.0.1:8080/"
 
     # Test unknown path when hotspot is inactive returns 404
     h_unknown_no_ap = DummyHandler("/some/random/url", {"Host": "example.com"}, is_ap=False)
@@ -203,7 +203,7 @@ def test_captive_portal_redirection_and_hotspot_routing():
     assert b"Remote" in h_wifi.wfile.getvalue()
 
     # Test /api/* reachable on AP interface even if REMOTE_PIN is set
-    h_api = DummyHandler("/api/state", client_addr=("10.42.0.5", 1234), pin="9999")
+    h_api = DummyHandler("/api/state", client_addr=("10.0.0.5", 1234), pin="9999")
     assert 200 in h_api.responses
     assert b"playing" in h_api.wfile.getvalue()
 

@@ -20,7 +20,10 @@ install -m 644 files/katoy-welcome.desktop  "$R/usr/share/applications/katoy-wel
 install -m 644 files/katoy-update.desktop   "$R/usr/share/applications/katoy-update.desktop"
 install -m 644 files/katoy-karaoke.desktop  "$R/usr/share/applications/katoy-karaoke.desktop"
 install -m 644 files/katoy-karaoke.conf     "$R/etc/katoyos/karaoke.conf"
+install -m 644 files/hostapd.conf           "$R/etc/katoyos/hostapd.conf"
 install -m 644 files/katoy-karaoke.service  "$R/etc/systemd/system/katoy-karaoke.service"
+install -m 644 files/katoy-ap.service       "$R/etc/systemd/system/katoy-ap.service"
+install -m 644 files/katoy-ap-dhcp.service  "$R/etc/systemd/system/katoy-ap-dhcp.service"
 install -m 644 files/katoy-expand-data.service "$R/etc/systemd/system/katoy-expand-data.service"
 install -m 644 files/katoy-powerwatch.desktop "$R/etc/xdg/autostart/katoy-powerwatch.desktop"
 
@@ -49,6 +52,8 @@ if [ "${KATOY_KIOSK:-1}" = "1" ]; then
 	install -d "$R/etc/systemd/system/multi-user.target.wants"
 	ln -sf /etc/systemd/system/katoy-expand-data.service "$R/etc/systemd/system/multi-user.target.wants/katoy-expand-data.service"
 	ln -sf /etc/systemd/system/katoy-karaoke.service "$R/etc/systemd/system/multi-user.target.wants/katoy-karaoke.service"
+	ln -sf /etc/systemd/system/katoy-ap.service "$R/etc/systemd/system/multi-user.target.wants/katoy-ap.service"
+	ln -sf /etc/systemd/system/katoy-ap-dhcp.service "$R/etc/systemd/system/multi-user.target.wants/katoy-ap-dhcp.service"
 	ln -sf /lib/systemd/system/multi-user.target "$R/etc/systemd/system/default.target"
 	rm -f "$R/etc/systemd/system/display-manager.service"
 	# Keep the user's systemd instance (PipeWire audio) alive independent of the tty1 session.

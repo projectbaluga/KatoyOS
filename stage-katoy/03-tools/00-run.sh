@@ -15,6 +15,7 @@ install -m 644 files/90katoy-noninteractive "$R/etc/apt/apt.conf.d/90katoy-nonin
 install -m 644 files/os.katoy.helper.policy "$R/usr/share/polkit-1/actions/os.katoy.helper.policy"
 install -m 644 files/10-udisks2-katoy.rules  "$R/etc/polkit-1/rules.d/10-udisks2-katoy.rules"
 install -m 644 files/11-katoy-helper.rules  "$R/etc/polkit-1/rules.d/11-katoy-helper.rules"
+install -m 644 files/50-katoy-nm.rules      "$R/etc/polkit-1/rules.d/50-katoy-nm.rules"
 install -m 644 files/katoy-welcome.desktop  "$R/usr/share/applications/katoy-welcome.desktop"
 install -m 644 files/katoy-update.desktop   "$R/usr/share/applications/katoy-update.desktop"
 install -m 644 files/katoy-karaoke.desktop  "$R/usr/share/applications/katoy-karaoke.desktop"

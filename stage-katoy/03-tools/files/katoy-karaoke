@@ -701,7 +701,13 @@ button.m{border:0;color:#052e22;background:linear-gradient(90deg,var(--mint),var
  <button class="p" data-act="/api/pause">Pause / Resume</button><button class="m" data-act="/api/skip">Next song</button>
 </div></div>
 
-<div class="card"><h3>UP NEXT</h3><div id="queue" class="muted">Queue is empty</div></div>
+<div class="card">
+ <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+  <h3 style="margin:0">UP NEXT</h3>
+  <button id="clear_q_btn" style="padding:6px 12px;font-size:13px;border-radius:10px">Clear queue</button>
+ </div>
+ <div id="queue" class="muted">Queue is empty</div>
+</div>
 <div id="toast"></div></div>
 <script>
 const PIN=new URLSearchParams(location.search).get('pin')||'';
@@ -762,6 +768,9 @@ async function state(){
 }
 $('#queue').addEventListener('click',async e=>{const b=e.target.closest('button[data-del]');if(!b)return;
  const d=await api('/api/queue/remove?index='+b.dataset.del);toast(d.msg||d.error);state();});
+$('#clear_q_btn').addEventListener('click',async()=>{
+ const d=await api('/api/queue/clear');toast(d.msg||d.error);state();
+});
 search(true);state();setInterval(state,2000);
 </script></body></html>""".replace("__THEME_ROOT_CSS__", THEME_ROOT_CSS)
 
@@ -809,6 +818,8 @@ button{width:100%;margin-top:22px;border:0;font-weight:800;background:linear-gra
 <button type="submit" id="save_btn">Save Settings</button>
 <div id="msg"></div>
 </form>
+<hr style="border:0;border-top:1px solid rgba(255,255,255,.12);margin:24px 0">
+<button type="button" id="rescan_btn" style="background:rgba(255,255,255,.12);border:1px solid rgba(255,255,255,.2)">&#128260; Rescan Song Library</button>
 </div>
 <script>
 const PIN=new URLSearchParams(location.search).get('pin')||'';
@@ -827,6 +838,13 @@ document.getElementById('f').addEventListener('submit',async(e)=>{
   m.textContent=d.msg||d.error||'Settings saved.';
  }catch(err){m.textContent='Error applying settings: '+err;}
  btn.disabled=false;
+});
+document.getElementById('rescan_btn').addEventListener('click',async()=>{
+ const m=document.getElementById('msg');m.textContent='Rescanning library...';
+ try{
+  const r=await fetch('/api/rescan'+(PIN?'?pin='+encodeURIComponent(PIN):''));
+  const d=await r.json();m.textContent=d.msg||'Rescan started.';
+ }catch(err){m.textContent='Error: '+err;}
 });
 </script></body></html>""".replace('__THEME_ROOT_CSS__', THEME_ROOT_CSS).replace('__BG_TOP__', HEX_BG_TOP)
 
@@ -2265,8 +2283,12 @@ class QueueRowDelegate(QStyledItemDelegate):
         return QSize(option.rect.width(), S(82))
 
     def paint(self, painter, option, index):
-        data = index.data(Qt.ItemDataRole.UserRole) or (0, "", "", "")
-        n, code, title, artist = data
+        data = index.data(Qt.ItemDataRole.UserRole) or (0, "", "", "", "")
+        n = data[0]
+        code = data[1]
+        title = data[2]
+        artist = data[3]
+        singer = data[4] if len(data) > 4 else ""
         painter.save()
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         painter.setRenderHint(QPainter.RenderHint.TextAntialiasing)
@@ -2295,7 +2317,7 @@ class QueueRowDelegate(QStyledItemDelegate):
         painter.drawText(QRectF(tx, r.top() + S(8), tw, r.height() / 2), int(Qt.AlignmentFlag.AlignVCenter), el)
         painter.setFont(ui_font(17, QFont.Weight.Medium))
         painter.setPen(COL_MUTED)
-        sub = f"{code}  ·  {artist}"
+        sub = f"{code}  ·  {artist}" + (f"  ·  🎤 {singer}" if singer else "")
         el = QFontMetrics(painter.font()).elidedText(sub, Qt.TextElideMode.ElideRight, tw)
         painter.drawText(QRectF(tx, r.top() + r.height() / 2 - S(2), tw, r.height() / 2 - S(6)), int(Qt.AlignmentFlag.AlignVCenter), el)
         painter.restore()
@@ -2746,6 +2768,8 @@ class KaraokeApp(QWidget):
             if hasattr(self, "idle_ssid_lbl"):
                 self.idle_ssid_lbl.setText(f"1. Connect to Wi-Fi:  <b>{ssid}</b>")
                 self.idle_pwd_lbl.setText(f"2. Password:  <b>{pwd}</b>")
+                r_port = self.config.get("REMOTE_PORT", "8080")
+                self.idle_web_lbl.setText(f"3. Wait for remote to open — or visit <b>http://10.0.0.1:{r_port}</b>")
             host = ip if have_ip else "10.0.0.1"
             self.remote_title.setText("Sing from your phone")
             self.remote_sub.setText(f"Connect your phone to '{ssid}' Wi-Fi, then scan or visit the remote.")
@@ -2831,7 +2855,8 @@ class KaraokeApp(QWidget):
         self.idle_ssid_lbl.setFont(ui_font(24, QFont.Weight.DemiBold))
         self.idle_pwd_lbl = QLabel(f"2. Password:  <b>{pwd}</b>")
         self.idle_pwd_lbl.setFont(ui_font(24, QFont.Weight.DemiBold))
-        self.idle_web_lbl = QLabel("3. Wait for remote to open — or visit <b>http://10.0.0.1:8080</b>")
+        r_port = self.config.get("REMOTE_PORT", "8080")
+        self.idle_web_lbl = QLabel(f"3. Wait for remote to open — or visit <b>http://10.0.0.1:{r_port}</b>")
         self.idle_web_lbl.setFont(ui_font(24, QFont.Weight.DemiBold))
         self.idle_web_lbl.setStyleSheet("color: #ffd166;")
 
@@ -3312,16 +3337,24 @@ class KaraokeApp(QWidget):
     def _set_next_up(self):
         tag = "<span style='color:#34d399; font-weight:800;'>NEXT UP</span> &nbsp; "
         if self.reservation_queue:
-            _, title, artist, _ = self.reservation_queue[0]
-            self.next_up_lbl.setText(f"{tag}{html.escape(title)} <span style='color:#a9a1d6;'>— {html.escape(artist)}</span>")
+            first = self.reservation_queue[0]
+            title = first[1]
+            artist = first[2]
+            singer = first[4] if len(first) > 4 else ""
+            singer_txt = f" <span style='color:#ffd166;'>({html.escape(singer)})</span>" if singer else ""
+            self.next_up_lbl.setText(f"{tag}{html.escape(title)} <span style='color:#a9a1d6;'>— {html.escape(artist)}</span>{singer_txt}")
         else:
             self.next_up_lbl.setText(f"{tag}<span style='color:#a9a1d6;'>nobody yet — reserve a song!</span>")
 
     def update_queue_ui(self):
         self.queue_list.clear()
-        for idx, (code, title, artist, _) in enumerate(self.reservation_queue, 1):
+        for idx, entry in enumerate(self.reservation_queue, 1):
+            code = entry[0]
+            title = entry[1]
+            artist = entry[2]
+            singer = entry[4] if len(entry) > 4 else ""
             item = QListWidgetItem()
-            item.setData(Qt.ItemDataRole.UserRole, (idx, code, title, artist))
+            item.setData(Qt.ItemDataRole.UserRole, (idx, code, title, artist, singer))
             self.queue_list.addItem(item)
         self.queue_count_lbl.setText(str(len(self.reservation_queue)))
         self._set_next_up()
@@ -3335,8 +3368,12 @@ class KaraokeApp(QWidget):
         if self.reservation_queue:
             song_tuple = self.reservation_queue.pop(0)
             self.update_queue_ui()
-            code, title, artist, filepath = song_tuple
-            self.start_playback(code, title, artist, filepath)
+            code = song_tuple[0]
+            title = song_tuple[1]
+            artist = song_tuple[2]
+            filepath = song_tuple[3]
+            singer = song_tuple[4] if len(song_tuple) > 4 else ""
+            self.start_playback(code, title, artist, filepath, singer=singer)
         else:
             self.stop_playback()
 

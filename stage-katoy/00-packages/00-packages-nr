@@ -10,6 +10,7 @@ fonts-dejavu-core
 openbox
 udiskie
 qterminal
+mpv
 # system services
 network-manager
 # required for standalone KaraOkePi AP hotspot and captive portal

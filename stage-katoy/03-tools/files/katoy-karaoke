@@ -604,6 +604,7 @@ HEX_TEXT = "#f5f3ff"
 HEX_MUTED = "#a9a1d6"
 HEX_BG_TOP = "#0a061f"
 HEX_BG_BOTTOM = "#1c0f4a"
+AP_GATEWAY_IP = "10.0.0.1"
 
 THEME_ROOT_CSS = f":root{{--pink:{HEX_PINK};--violet:{HEX_VIOLET};--cyan:{HEX_CYAN};--gold:{HEX_GOLD};--mint:{HEX_MINT};--text:{HEX_TEXT};--muted:{HEX_MUTED};--bg-top:{HEX_BG_TOP};--bg-bottom:{HEX_BG_BOTTOM}}}"
 
@@ -2617,7 +2618,6 @@ class KaraokeApp(QWidget):
         sc("Esc", self.on_escape_pressed)
         sc("F5", self.on_rescan_pressed)
         sc("Space", self.on_space_shortcut)
-        sc("R", self.on_reserve_shortcut)
         sc("+", lambda: self.adjust_key(1))
         sc("=", lambda: self.adjust_key(1))
         sc("-", lambda: self.adjust_key(-1))
@@ -2626,20 +2626,11 @@ class KaraokeApp(QWidget):
         sc("N", self.on_next_shortcut)
         sc("F2", lambda: self.stack.setCurrentWidget(self.settings_page))
 
-    def is_search_focused(self):
-        return hasattr(self, 'search_input') and self.search_input.hasFocus()
-
     def on_space_shortcut(self):
-        if not self.is_search_focused():
-            self.toggle_play_pause()
-
-    def on_reserve_shortcut(self):
-        if not self.is_search_focused():
-            self.reserve_selected_song()
+        self.toggle_play_pause()
 
     def on_next_shortcut(self):
-        if not self.is_search_focused():
-            self.play_next_reserved_song()
+        self.play_next_reserved_song()
 
     def on_remote_reserve_song(self, song_tuple):
         code = song_tuple[0]
@@ -2769,8 +2760,8 @@ class KaraokeApp(QWidget):
                 self.idle_ssid_lbl.setText(f"1. Connect to Wi-Fi:  <b>{ssid}</b>")
                 self.idle_pwd_lbl.setText(f"2. Password:  <b>{pwd}</b>")
                 r_port = self.config.get("REMOTE_PORT", "8080")
-                self.idle_web_lbl.setText(f"3. Wait for remote to open — or visit <b>http://10.0.0.1:{r_port}</b>")
-            host = ip if have_ip else "10.0.0.1"
+                self.idle_web_lbl.setText(f"3. Wait for remote to open — or visit <b>http://{AP_GATEWAY_IP}:{r_port}</b>")
+            host = ip if have_ip else AP_GATEWAY_IP
             self.remote_title.setText("Sing from your phone")
             self.remote_sub.setText(f"Connect your phone to '{ssid}' Wi-Fi, then scan or visit the remote.")
             self.qr_a.set_qr(wifi_qr_payload(ssid, pwd), "1 · Join Wi-Fi", 230)
@@ -2856,7 +2847,7 @@ class KaraokeApp(QWidget):
         self.idle_pwd_lbl = QLabel(f"2. Password:  <b>{pwd}</b>")
         self.idle_pwd_lbl.setFont(ui_font(24, QFont.Weight.DemiBold))
         r_port = self.config.get("REMOTE_PORT", "8080")
-        self.idle_web_lbl = QLabel(f"3. Wait for remote to open — or visit <b>http://10.0.0.1:{r_port}</b>")
+        self.idle_web_lbl = QLabel(f"3. Wait for remote to open — or visit <b>http://{AP_GATEWAY_IP}:{r_port}</b>")
         self.idle_web_lbl.setFont(ui_font(24, QFont.Weight.DemiBold))
         self.idle_web_lbl.setStyleSheet("color: #ffd166;")
 
@@ -2866,11 +2857,7 @@ class KaraokeApp(QWidget):
         left.addWidget(guide_card)
         left.addStretch()
 
-        # Dummy search and table attributes so background indexer / filter_library stays happy
-        self.search_input = QLineEdit()
-        self.table = QTableWidget()
         self.status_lbl = QLabel("Ready")
-        self.index_progress_bar = QProgressBar()
 
         # right: Up next queue list card (read-only display)
         q_card = QFrame()
@@ -3289,50 +3276,13 @@ class KaraokeApp(QWidget):
         else:
             dir_name = "disconnected source"
         self.status_lbl.setText(f"Loaded from {dir_name}{read_only_msg}")
-        self.filter_library()
 
         if self.stack.currentWidget() == self.no_usb_page:
             self.stack.setCurrentWidget(self.library_page)
 
-    def filter_library(self):
-        if not self.db:
-            return
-        query = self.search_input.text().strip()
-        res = self.db.search(query, offset=0, limit=1000)
-        rows = res["songs"] if isinstance(res, dict) else res
-
-        self.table.setRowCount(len(rows))
-        for row_idx, (code, title, artist, filepath) in enumerate(rows):
-            item_code = QTableWidgetItem(code)
-            item_title = QTableWidgetItem(title)
-            item_artist = QTableWidgetItem(artist)
-
-            item_code.setData(Qt.ItemDataRole.UserRole, filepath)
-
-            self.table.setItem(row_idx, 0, item_code)
-            self.table.setItem(row_idx, 1, item_title)
-            self.table.setItem(row_idx, 2, item_artist)
-
-        if len(rows) > 0:
-            self.table.selectRow(0)
-
     def on_rescan_pressed(self):
         if self.songs_dir:
             self.start_async_indexing(force=True)
-
-    def reserve_selected_song(self):
-        curr_row = self.table.currentRow()
-        if curr_row < 0:
-            return
-        code = self.table.item(curr_row, 0).text()
-        title = self.table.item(curr_row, 1).text()
-        artist = self.table.item(curr_row, 2).text()
-        filepath = self.table.item(curr_row, 0).data(Qt.ItemDataRole.UserRole)
-
-        song_tuple = (code, title, artist, filepath)
-        self.reservation_queue.append(song_tuple)
-        self.update_queue_ui()
-        self.status_lbl.setText(f"Reserved: [{code}] {title}")
 
     def _set_next_up(self):
         tag = "<span style='color:#34d399; font-weight:800;'>NEXT UP</span> &nbsp; "
@@ -3382,8 +3332,8 @@ class KaraokeApp(QWidget):
         self.tempo_lbl.setText(f"TEMPO {int(round(self.tempo_multiplier * 100))}%")
 
     def set_pause_button(self, paused):
-        self.pause_btn.setText("Resume" if paused else "Pause")
-        self.pause_btn.setIcon(make_icon("play" if paused else "pause", "#ffffff", 64))
+        if hasattr(self, "pause_btn") and self.pause_btn:
+            self.pause_btn.setText("Resume" if paused else "Pause")
 
     def adjust_key(self, delta):
         self.pitch_key = max(-6, min(6, self.pitch_key + delta))
@@ -3404,28 +3354,7 @@ class KaraokeApp(QWidget):
             code, title, artist, filepath = self.current_song
             self.start_playback(code, title, artist, filepath)
 
-    def play_selected_or_first(self):
-        query = self.search_input.text().strip()
-        if query and self.db:
-            match = self.db.get_by_code(query)
-            if match:
-                code, title, artist, filepath = match
-                self.start_playback(code, title, artist, filepath)
-                return
 
-        curr_row = self.table.currentRow()
-        if curr_row >= 0:
-            self.play_selected_song()
-
-    def play_selected_song(self):
-        curr_row = self.table.currentRow()
-        if curr_row < 0:
-            return
-        code = self.table.item(curr_row, 0).text()
-        title = self.table.item(curr_row, 1).text()
-        artist = self.table.item(curr_row, 2).text()
-        filepath = self.table.item(curr_row, 0).data(Qt.ItemDataRole.UserRole)
-        self.start_playback(code, title, artist, filepath)
 
     def start_playback(self, code, title, artist, filepath, singer=""):
         self.stop_playback()
@@ -3494,8 +3423,8 @@ class KaraokeApp(QWidget):
         self.is_paused = False
         self.set_pause_button(False)
 
+        self.bg_timer.stop()
         self.update_background_image()
-        self.bg_timer.start()
         self.play_timer.start()
 
         self.stack.setCurrentWidget(self.player_page)
@@ -3554,8 +3483,9 @@ class KaraokeApp(QWidget):
 
     def stop_playback(self):
         self.play_timer.stop()
-        self.bg_timer.stop()
         self.score_timer.stop()
+        self.bg_timer.start()
+        self.update_background_image()
 
         if self.persistent_synth:
             self.persistent_synth.stop()

@@ -687,8 +687,13 @@ button.m{border:0;color:#052e22;background:linear-gradient(90deg,var(--mint),var
  <div class="chips"><span class="chip k" id="np_k">KEY 0</span><span class="chip t" id="np_p">TEMPO 100%</span></div>
 </div>
 
-<div class="card"><input id="q" type="search" inputmode="search" enterkeyhint="search" placeholder="Search code, title or artist&hellip;" autocomplete="off">
- <div id="results" style="margin-top:6px"></div></div>
+<div class="card">
+ <input id="q" type="search" inputmode="search" enterkeyhint="search" placeholder="Search code, title or artist&hellip;" autocomplete="off">
+ <div style="margin-top:10px">
+  <input id="singer" type="text" placeholder="Singer name (optional)" autocomplete="off" style="font-size:16px;padding:12px 18px">
+ </div>
+ <div id="results" style="margin-top:10px"></div>
+</div>
 
 <div class="card"><h3>CONTROLS</h3><div class="grid">
  <button data-act="/api/key?delta=-1">Key &minus;</button><button data-act="/api/key?delta=1">Key +</button>
@@ -726,7 +731,7 @@ function renderResults(){
   $('#results').innerHTML='<div class="muted" style="padding:10px 4px">No songs found</div>';
   return;
  }
- let html=found.map((s,i)=>`<div class="song"><div class="c">${esc(s[0])}</div><div class="i"><b>${esc(s[1])}</b><small>${esc(s[2])}</small></div><button class="p" data-i="${i}">Reserve</button></div>`).join('');
+ let html=found.map((s,i)=>`<div class="song"><div class="c">${esc(s[0])}</div><div class="i"><b>${esc(s[1])}</b><small>${esc(s[2])}</small></div><div style="display:flex;gap:6px"><button class="m" data-play="${i}">Play</button><button class="p" data-i="${i}">Reserve</button></div></div>`).join('');
  html+=`<div class="muted" style="padding:10px 4px;display:flex;justify-content:space-between;align-items:center"><span>Showing ${found.length} of ${totalSongs}</span>${found.length<totalSongs?'<button id="load_more" style="padding:8px 16px;font-size:14px">Load more</button>':''}</div>`;
  $('#results').innerHTML=html;
  const lm=$('#load_more');
@@ -734,16 +739,29 @@ function renderResults(){
 }
 $('#q').addEventListener('input',()=>{clearTimeout(deb);deb=setTimeout(()=>search(true),280)});
 $('#q').addEventListener('keydown',e=>{if(e.key==='Enter'){clearTimeout(deb);search(true);e.target.blur()}});
-$('#results').addEventListener('click',async e=>{const b=e.target.closest('button[data-i]');if(!b)return;
- const s=found[+b.dataset.i];const d=await api('/api/reserve?code='+encodeURIComponent(s[0]));toast(d.msg||d.error);state()});
+$('#results').addEventListener('click',async e=>{
+ const pb=e.target.closest('button[data-play]');
+ const singer=$('#singer').value.trim();
+ if(pb){
+  const s=found[+pb.dataset.play];
+  const d=await api('/api/play?code='+encodeURIComponent(s[0])+(singer?'&singer='+encodeURIComponent(singer):''));
+  toast(d.msg||d.error);state();return;
+ }
+ const b=e.target.closest('button[data-i]');if(!b)return;
+ const s=found[+b.dataset.i];
+ const d=await api('/api/reserve?code='+encodeURIComponent(s[0])+(singer?'&singer='+encodeURIComponent(singer):''));
+ toast(d.msg||d.error);state();
+});
 document.querySelectorAll('button[data-act]').forEach(b=>b.addEventListener('click',async()=>{await api(b.dataset.act);state()}));
 async function state(){
  const d=await api('/api/state');if(d.error)return;
  $('#np_t').textContent=d.playing?d.title:'Nothing playing';
  $('#np_a').textContent=d.playing?(d.artist+(d.paused?'  \u00b7  paused':'')):'Reserve a song below';
  $('#np_k').textContent='KEY '+(d.key>0?'+':'')+d.key;$('#np_p').textContent='TEMPO '+d.tempo+'%';
- $('#queue').innerHTML=d.queue.length?d.queue.map((s,i)=>`<div class="q"><div class="n">${i+1}</div><div><b>${esc(s[1])}</b><br><small class="muted">${esc(s[0])} \u00b7 ${esc(s[2])}</small></div></div>`).join(''):'Queue is empty';
+ $('#queue').innerHTML=d.queue.length?d.queue.map((s,i)=>`<div class="q"><div class="n">${i+1}</div><div style="flex:1;min-width:0"><b>${esc(s[1])}</b><br><small class="muted">${esc(s[0])} \u00b7 ${esc(s[2])}${s[3]?' \u00b7 \ud83c\udfa4 '+esc(s[3]):''}</small></div><button data-del="${i}" style="padding:6px 10px;font-size:13px;border-radius:10px">&times;</button></div>`).join(''):'Queue is empty';
 }
+$('#queue').addEventListener('click',async e=>{const b=e.target.closest('button[data-del]');if(!b)return;
+ const d=await api('/api/queue/remove?index='+b.dataset.del);toast(d.msg||d.error);state();});
 search(true);state();setInterval(state,2000);
 </script></body></html>""".replace("__THEME_ROOT_CSS__", THEME_ROOT_CSS)
 
@@ -815,6 +833,10 @@ document.getElementById('f').addEventListener('submit',async(e)=>{
 
 class RemoteBridgeSignals(QObject):
     reserve_song = pyqtSignal(tuple)
+    play_song = pyqtSignal(tuple)
+    remove_queue = pyqtSignal(int)
+    clear_queue = pyqtSignal()
+    rescan_library = pyqtSignal()
     adjust_key = pyqtSignal(int)
     adjust_tempo = pyqtSignal(float)
     skip_song = pyqtSignal()
@@ -1050,16 +1072,42 @@ class RemoteRequestHandler(BaseHTTPRequestHandler):
             limit = max(1, min(limit, 200))
             self.send_json(app.db.search(q, offset=offset, limit=limit) if (app and app.db) else {"songs": [], "total": 0})
         elif path == "/api/reserve":
-            # The phone only sends a song *code*; the file path always comes from our own index.
             code = params.get("code", [""])[0].strip()
+            singer = params.get("singer", [""])[0].strip()
             song = app.db.get_by_code(code) if (app and app.db and code) else None
             if song and self.bridge_signals:
-                self.bridge_signals.reserve_song.emit(tuple(song))
+                entry = (song[0], song[1], song[2], song[3], singer)
+                self.bridge_signals.reserve_song.emit(entry)
                 self.send_json({"status": "ok", "msg": f"Reserved: [{song[0]}] {song[1]}"})
             else:
                 self.send_json({"error": "Unknown song code"}, 404)
+        elif path == "/api/play":
+            code = params.get("code", [""])[0].strip()
+            singer = params.get("singer", [""])[0].strip()
+            song = app.db.get_by_code(code) if (app and app.db and code) else None
+            if song and self.bridge_signals:
+                entry = (song[0], song[1], song[2], song[3], singer)
+                self.bridge_signals.play_song.emit(entry)
+                self.send_json({"status": "ok", "msg": f"Playing now: [{song[0]}] {song[1]}"})
+            else:
+                self.send_json({"error": "Unknown song code"}, 404)
+        elif path == "/api/queue/remove":
+            idx = params.get("index", [""])[0].strip()
+            if idx.isdigit() and self.bridge_signals:
+                self.bridge_signals.remove_queue.emit(int(idx))
+                self.send_json({"status": "ok", "msg": "Removed from queue"})
+            else:
+                self.send_json({"error": "Invalid queue index"}, 400)
+        elif path == "/api/queue/clear":
+            if self.bridge_signals:
+                self.bridge_signals.clear_queue.emit()
+            self.send_json({"status": "ok", "msg": "Queue cleared"})
+        elif path == "/api/rescan":
+            if self.bridge_signals:
+                self.bridge_signals.rescan_library.emit()
+            self.send_json({"status": "ok", "msg": "Library rescan started"})
         elif path == "/api/queue":
-            self.send_json([list(s[:3]) for s in list(app.reservation_queue)] if app else [])
+            self.send_json([[s[0], s[1], s[2], s[4] if len(s) > 4 else ""] for s in list(app.reservation_queue)] if app else [])
         elif path == "/api/state":
             cur = app.current_song if app else None
             self.send_json({
@@ -1070,7 +1118,7 @@ class RemoteRequestHandler(BaseHTTPRequestHandler):
                 "artist": cur[2] if cur else "",
                 "key": app.pitch_key if app else 0,
                 "tempo": int(round(app.tempo_multiplier * 100)) if app else 100,
-                "queue": [list(s[:3]) for s in list(app.reservation_queue)] if app else [],
+                "queue": [[s[0], s[1], s[2], s[4] if len(s) > 4 else ""] for s in list(app.reservation_queue)] if app else [],
             })
         elif path in ("/api/key", "/api/tempo"):
             try:
@@ -2428,8 +2476,9 @@ class KaraokeApp(QWidget):
         self.play_timer.timeout.connect(self.update_playback_ui)
 
         self.bg_timer = QTimer(self)
-        self.bg_timer.setInterval(15000)
+        self.bg_timer.setInterval(10000)
         self.bg_timer.timeout.connect(self.rotate_background)
+        self.bg_timer.start()
 
         self.score_timer = QTimer(self)
         self.score_timer.setSingleShot(True)
@@ -2441,6 +2490,10 @@ class KaraokeApp(QWidget):
 
         self.remote_signals = RemoteBridgeSignals()
         self.remote_signals.reserve_song.connect(self.on_remote_reserve_song)
+        self.remote_signals.play_song.connect(self.on_remote_play_song)
+        self.remote_signals.remove_queue.connect(self.on_remote_remove_queue)
+        self.remote_signals.clear_queue.connect(self.clear_reservation_queue)
+        self.remote_signals.rescan_library.connect(self.on_rescan_pressed)
         self.remote_signals.adjust_key.connect(self.adjust_key)
         self.remote_signals.adjust_tempo.connect(self.adjust_tempo)
         self.remote_signals.skip_song.connect(self.play_next_reserved_song)
@@ -2567,11 +2620,34 @@ class KaraokeApp(QWidget):
             self.play_next_reserved_song()
 
     def on_remote_reserve_song(self, song_tuple):
-        code, title, artist, filepath = song_tuple
-        self.reservation_queue.append((code, title, artist, filepath))
+        code = song_tuple[0]
+        title = song_tuple[1]
+        artist = song_tuple[2]
+        filepath = song_tuple[3]
+        singer = song_tuple[4] if len(song_tuple) > 4 else ""
+        entry = (code, title, artist, filepath, singer)
+        self.reservation_queue.append(entry)
         self.update_queue_ui()
-        self.status_lbl.setText(f"Remote reserved: [{code}] {title}")
-        self.toast.flash(f"Reserved from phone:  {title}", 3000)
+        if hasattr(self, "status_lbl"):
+            self.status_lbl.setText(f"Remote reserved: [{code}] {title}")
+        self.toast.flash(f"Reserved from phone: {title}", 3000)
+        # If nothing is currently playing, start playback automatically
+        if not self.is_playing:
+            self.play_next_reserved_song()
+
+    def on_remote_play_song(self, song_tuple):
+        code = song_tuple[0]
+        title = song_tuple[1]
+        artist = song_tuple[2]
+        filepath = song_tuple[3]
+        singer = song_tuple[4] if len(song_tuple) > 4 else ""
+        self.start_playback(code, title, artist, filepath, singer=singer)
+
+    def on_remote_remove_queue(self, idx):
+        if 0 <= idx < len(self.reservation_queue):
+            removed = self.reservation_queue.pop(idx)
+            self.update_queue_ui()
+            self.toast.flash(f"Removed: {removed[1]}", 2000)
 
     # -- idle / "insert USB" page ---------------------------------------------------
     def create_no_usb_page(self):
@@ -2667,6 +2743,9 @@ class KaraokeApp(QWidget):
         if ap:
             ssid = self.net_ssid or self.config.get("HOTSPOT_SSID", "KaraOkePi")
             pwd = self.config.get("HOTSPOT_PASSWORD", "katoyos123")
+            if hasattr(self, "idle_ssid_lbl"):
+                self.idle_ssid_lbl.setText(f"1. Connect to Wi-Fi:  <b>{ssid}</b>")
+                self.idle_pwd_lbl.setText(f"2. Password:  <b>{pwd}</b>")
             host = ip if have_ip else "10.0.0.1"
             self.remote_title.setText("Sing from your phone")
             self.remote_sub.setText(f"Connect your phone to '{ssid}' Wi-Fi, then scan or visit the remote.")
@@ -2698,108 +2777,86 @@ class KaraokeApp(QWidget):
         if hasattr(self, "sys_remote_val"):
             self.sys_remote_val.setText(f"http://{ip}:{self.config.get('REMOTE_PORT', '8080')}" if ip and not ip.startswith("127.") else "offline")
 
-    # -- song library page -------------------------------------------------------------
+    # -- song library / idle attract-mode page ------------------------------------------
     def create_library_page(self):
         w = QWidget()
-        root = QVBoxLayout(w)
-        root.setContentsMargins(S(60), S(40), S(60), S(30))
-        root.setSpacing(S(20))
+        outer = QHBoxLayout(w)
+        outer.setContentsMargins(S(90), S(60), S(90), S(60))
+        outer.setSpacing(S(60))
 
-        header = QHBoxLayout()
-        header.setSpacing(S(18))
+        # left: Large attract logo + Connection Guide
+        left = QVBoxLayout()
+        left.setAlignment(Qt.AlignmentFlag.AlignVCenter)
+        left.setSpacing(S(16))
+
+        brand_row = QHBoxLayout()
         badge = QLabel()
-        badge.setPixmap(badge_pixmap("mic", S(58)))
-        title = GradientLabel("KaraOkePi", 44, QFont.Weight.Black, (COL_PINK, COL_GOLD))
+        badge.setPixmap(badge_pixmap("mic", S(64)))
+        brand = QLabel("KARAOKEPI")
+        brand.setFont(ui_font(22, QFont.Weight.ExtraBold, spacing=S(8)))
+        brand.setStyleSheet("color: #ff8cc4;")
+        brand_row.addWidget(badge)
+        brand_row.addSpacing(S(14))
+        brand_row.addWidget(brand)
         self.count_lbl = QLabel("0 songs")
         self.count_lbl.setProperty("role", "count")
         self.count_lbl.setFont(ui_font(18, QFont.Weight.ExtraBold))
+        brand_row.addSpacing(S(18))
+        brand_row.addWidget(self.count_lbl)
+        brand_row.addStretch()
+        left.addLayout(brand_row)
 
-        self.rescan_btn = styled_button("", "icon", "refresh", icon_px=28)
-        self.rescan_btn.setToolTip("Rescan USB (F5)")
-        self.rescan_btn.clicked.connect(self.on_rescan_pressed)
-        settings_btn = styled_button("", "icon", "gear", icon_px=28)
-        settings_btn.setToolTip("Settings (F2)")
-        settings_btn.clicked.connect(lambda: self.stack.setCurrentWidget(self.settings_page))
+        title = GradientLabel("KaraOkePi", 110, QFont.Weight.Black, (COL_PINK, COL_GOLD))
+        left.addWidget(title)
 
-        header.addWidget(badge)
-        header.addWidget(title)
-        header.addWidget(self.count_lbl, 0, Qt.AlignmentFlag.AlignVCenter)
-        header.addStretch()
-        header.addWidget(settings_btn)
-        header.addWidget(self.rescan_btn)
-        root.addLayout(header)
+        self.eq = EqualizerWidget(26)
+        left.addWidget(self.eq)
+        left.addSpacing(S(12))
 
-        body = QHBoxLayout()
-        body.setSpacing(S(28))
+        # "How to Play" text guide card
+        guide_card = QFrame()
+        guide_card.setObjectName("card")
+        gl = QVBoxLayout(guide_card)
+        gl.setContentsMargins(S(36), S(28), S(36), S(28))
+        gl.setSpacing(S(12))
 
-        # left: search + songs
-        left = QVBoxLayout()
-        left.setSpacing(S(16))
+        g_title = QLabel("HOW TO PLAY")
+        g_title.setFont(ui_font(18, QFont.Weight.Black, spacing=S(4)))
+        g_title.setStyleSheet("color: #22d3ee;")
+        gl.addWidget(g_title)
+
+        ssid = self.config.get("HOTSPOT_SSID", "KaraOkePi")
+        pwd = self.config.get("HOTSPOT_PASSWORD", "katoyos123")
+        self.idle_ssid_lbl = QLabel(f"1. Connect to Wi-Fi:  <b>{ssid}</b>")
+        self.idle_ssid_lbl.setFont(ui_font(24, QFont.Weight.DemiBold))
+        self.idle_pwd_lbl = QLabel(f"2. Password:  <b>{pwd}</b>")
+        self.idle_pwd_lbl.setFont(ui_font(24, QFont.Weight.DemiBold))
+        self.idle_web_lbl = QLabel("3. Wait for remote to open — or visit <b>http://10.0.0.1:8080</b>")
+        self.idle_web_lbl.setFont(ui_font(24, QFont.Weight.DemiBold))
+        self.idle_web_lbl.setStyleSheet("color: #ffd166;")
+
+        gl.addWidget(self.idle_ssid_lbl)
+        gl.addWidget(self.idle_pwd_lbl)
+        gl.addWidget(self.idle_web_lbl)
+        left.addWidget(guide_card)
+        left.addStretch()
+
+        # Dummy search and table attributes so background indexer / filter_library stays happy
         self.search_input = QLineEdit()
-        self.search_input.setPlaceholderText("Type a 5-digit song code, title or artist…")
-        self.search_input.setFixedHeight(S(64))
-        s_ic = QLabel(self.search_input)
-        s_ic.setPixmap(make_icon("search", "#a9a1d6", 64).pixmap(S(30), S(30)))
-        s_ic.move(S(22), (S(64) - S(30)) // 2)
-        s_ic.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
-        self.search_input.textChanged.connect(self.filter_library)
-        self.search_input.returnPressed.connect(self.play_selected_or_first)
-        left.addWidget(self.search_input)
-
         self.table = QTableWidget()
-        self.table.setColumnCount(3)
-        self.table.setHorizontalHeaderLabels(["Code", "Title", "Artist"])
-        hh = self.table.horizontalHeader()
-        hh.hide()
-        hh.setSectionResizeMode(0, QHeaderView.ResizeMode.Fixed)
-        hh.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
-        hh.setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
-        self.table.setColumnWidth(0, S(150))
-        self.table.verticalHeader().hide()
-        self.table.verticalHeader().setDefaultSectionSize(S(66))
-        self.table.setShowGrid(False)
-        self.table.setFrameShape(QFrame.Shape.NoFrame)
-        self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
-        self.table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
-        self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
-        self.table.setVerticalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
-        self.table.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        self.table.setMouseTracking(True)
-        self.table.setItemDelegate(SongRowDelegate(self.table))
-        self.table.doubleClicked.connect(self.play_selected_song)
-        left.addWidget(self.table, 1)
-
-        action_bar = QHBoxLayout()
-        action_bar.setSpacing(S(14))
-        play_now_btn = styled_button("Play now", "primary", "play")
-        play_now_btn.clicked.connect(self.play_selected_song)
-        reserve_btn = styled_button("Reserve", None, "bookmark")
-        reserve_btn.clicked.connect(self.reserve_selected_song)
-        action_bar.addWidget(play_now_btn)
-        action_bar.addWidget(reserve_btn)
-        action_bar.addStretch()
-
         self.status_lbl = QLabel("Ready")
-        self.status_lbl.setFont(ui_font(17, QFont.Weight.Medium))
-        self.status_lbl.setProperty("role", "muted")
         self.index_progress_bar = QProgressBar()
-        self.index_progress_bar.setFixedWidth(S(220))
-        self.index_progress_bar.setTextVisible(False)
-        self.index_progress_bar.hide()
-        action_bar.addWidget(self.status_lbl)
-        action_bar.addWidget(self.index_progress_bar)
-        left.addLayout(action_bar)
 
-        # right: reservation queue
-        card = QFrame()
-        card.setObjectName("card")
-        card.setFixedWidth(S(520))
-        right = QVBoxLayout(card)
-        right.setContentsMargins(S(26), S(26), S(26), S(26))
+        # right: Up next queue list card (read-only display)
+        q_card = QFrame()
+        q_card.setObjectName("card")
+        q_card.setFixedWidth(S(540))
+        right = QVBoxLayout(q_card)
+        right.setContentsMargins(S(30), S(30), S(30), S(30))
         right.setSpacing(S(16))
 
         qh = QHBoxLayout()
-        qt = QLabel("Up next")
+        qt = QLabel("Up Next")
         qt.setFont(ui_font(30, QFont.Weight.ExtraBold))
         self.queue_count_lbl = QLabel("0")
         self.queue_count_lbl.setProperty("role", "count")
@@ -2809,33 +2866,14 @@ class KaraokeApp(QWidget):
         qh.addStretch()
         right.addLayout(qh)
 
-        self.queue_list = EmptyAwareList("No songs reserved yet.\nSelect a song and press R.")
+        self.queue_list = EmptyAwareList("No songs reserved yet.\nScan code or visit 10.0.0.1 to play!")
         self.queue_list.setItemDelegate(QueueRowDelegate(self.queue_list))
         self.queue_list.setFrameShape(QFrame.Shape.NoFrame)
         self.queue_list.setVerticalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
         right.addWidget(self.queue_list, 1)
 
-        qb = QHBoxLayout()
-        qb.setSpacing(S(12))
-        clear_q_btn = styled_button("Clear", None, "close", font_px=17, icon_px=20)
-        clear_q_btn.clicked.connect(self.clear_reservation_queue)
-        play_q_btn = styled_button("Play next", "mint", "next", font_px=17, icon_px=22)
-        play_q_btn.clicked.connect(self.play_next_reserved_song)
-        qb.addWidget(clear_q_btn)
-        qb.addWidget(play_q_btn, 1)
-        right.addLayout(qb)
-
-        body.addLayout(left, 1)
-        body.addWidget(card)
-        root.addLayout(body, 1)
-
-        hints = QHBoxLayout()
-        hints.setSpacing(S(26))
-        for k, t in (("Enter", "Play"), ("R", "Reserve"), ("N", "Next"), ("+ / −", "Key"),
-                     ("[ ]", "Tempo"), ("Space", "Pause"), ("F2", "Settings"), ("Esc", "Back")):
-            hints.addWidget(kbd_chip(k, t))
-        hints.addStretch()
-        root.addLayout(hints)
+        outer.addLayout(left, 1)
+        outer.addWidget(q_card)
         return w
 
     # -- player page ----------------------------------------------------------------
@@ -2874,14 +2912,10 @@ class KaraokeApp(QWidget):
         self.tempo_lbl.setProperty("tone", "cyan")
         self.tempo_lbl.setFont(ui_font(20, QFont.Weight.ExtraBold))
 
-        stop_btn = styled_button("Song list", None, "back", font_px=18, icon_px=22)
-        stop_btn.clicked.connect(self.stop_playback)
-
         tl.addWidget(self.p_code_lbl)
         tl.addLayout(tcol, 1)
         tl.addWidget(self.key_lbl)
         tl.addWidget(self.tempo_lbl)
-        tl.addWidget(stop_btn)
         lay.addWidget(strip)
 
         # centre: lyrics  /  score card
@@ -2929,36 +2963,9 @@ class KaraokeApp(QWidget):
         self.progress_bar.setTextVisible(False)
         lay.addWidget(self.progress_bar)
 
-        holder = QWidget()
-        holder.setFixedHeight(S(112))
-        hl = QHBoxLayout(holder)
-        hl.setContentsMargins(0, S(10), 0, 0)
-        hl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-
         self.controls_card = QFrame()
-        self.controls_card.setObjectName("controls")
-        cl = QHBoxLayout(self.controls_card)
-        cl.setContentsMargins(S(22), S(8), S(22), S(8))
-        cl.setSpacing(S(12))
-
-        def ctl(text, icon, fn, variant=None):
-            b = styled_button(text, variant, icon, font_px=18, icon_px=24)
-            b.clicked.connect(fn)
-            return b
-
-        cl.addWidget(ctl("Key", "down", lambda: self.adjust_key(-1)))
-        cl.addWidget(ctl("Key", "up", lambda: self.adjust_key(1)))
-        cl.addSpacing(S(10))
-        cl.addWidget(ctl("Tempo", "minus", lambda: self.adjust_tempo(-0.05)))
-        cl.addWidget(ctl("Tempo", "plus", lambda: self.adjust_tempo(0.05)))
-        cl.addSpacing(S(10))
-        self.pause_btn = styled_button("Pause", "primary", "pause", font_px=20, icon_px=26)
-        self.pause_btn.clicked.connect(self.toggle_play_pause)
-        cl.addWidget(self.pause_btn)
-        cl.addSpacing(S(10))
-        cl.addWidget(ctl("Next", "next", self.play_next_reserved_song, "mint"))
-        hl.addWidget(self.controls_card)
-        lay.addWidget(holder)
+        self.controls_card.hide()
+        self.pause_btn = QPushButton()
 
         self._set_next_up()
         return w
@@ -3130,8 +3137,8 @@ class KaraokeApp(QWidget):
     def paintEvent(self, ev):
         p = QPainter(self)
         size = self.size()
-        on_player = hasattr(self, "player_page") and self.stack.currentWidget() is self.player_page
-        if on_player and self._cover_src is not None and not self._cover_src.isNull():
+        show_bg = self._cover_src is not None and not self._cover_src.isNull()
+        if show_bg:
             if self._cover_cache is None or self._cover_cache.size() != size:
                 self._cover_cache = self._build_cover_bg(size)
             p.drawPixmap(0, 0, self._cover_cache)
@@ -3147,7 +3154,7 @@ class KaraokeApp(QWidget):
 
     def on_page_changed(self, _idx):
         if self.stack.currentWidget() is self.library_page:
-            self.search_input.setFocus()
+            pass
         if self.stack.currentWidget() is self.player_page:
             self.poke_controls()
         if self.stack.currentWidget() is self.settings_page:
@@ -3383,7 +3390,7 @@ class KaraokeApp(QWidget):
         filepath = self.table.item(curr_row, 0).data(Qt.ItemDataRole.UserRole)
         self.start_playback(code, title, artist, filepath)
 
-    def start_playback(self, code, title, artist, filepath):
+    def start_playback(self, code, title, artist, filepath, singer=""):
         self.stop_playback()
 
         if not self.soundfont:
@@ -3398,7 +3405,7 @@ class KaraokeApp(QWidget):
         self.current_song = (code, title, artist, filepath)
         self.p_code_lbl.setText(code)
         self.p_title_lbl.setText(title)
-        self.p_artist_lbl.setText(artist)
+        self.p_artist_lbl.setText(f"{artist}  ·  Singer: {singer}" if singer else artist)
         self.refresh_chips()
         self.hide_score()
         self._lyric_idx = -2
@@ -3536,7 +3543,6 @@ class KaraokeApp(QWidget):
 
         if self.stack.currentWidget() == self.player_page:
             self.stack.setCurrentWidget(self.library_page)
-            self.search_input.setFocus()
 
     def update_playback_ui(self):
         if not self.is_playing:

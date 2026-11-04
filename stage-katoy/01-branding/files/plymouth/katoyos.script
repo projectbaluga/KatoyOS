@@ -1,5 +1,5 @@
-Window.SetBackgroundTopColor(1.0, 1.0, 1.0);
-Window.SetBackgroundBottomColor(1.0, 1.0, 1.0);
+Window.SetBackgroundTopColor(0.0118, 0.0235, 0.0863);
+Window.SetBackgroundBottomColor(0.0118, 0.0235, 0.0863);
 img = Image("splash.png");
 sw = Window.GetWidth();
 sh = Window.GetHeight();

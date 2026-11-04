@@ -3242,9 +3242,9 @@ class KaraokeApp(QWidget):
         if not self.songs_dir:
             return
 
-        self.status_lbl.setText("Indexing songs…")
-        self.index_progress_bar.setValue(0)
-        self.index_progress_bar.show()
+        if hasattr(self, "status_lbl"):
+            self.status_lbl.setText("Indexing songs…")
+        self.indexing_progress = (0, 0)
 
         self.indexer_worker = SongIndexerWorker(self.songs_dir, self.config, force=force)
         self.indexer_worker.progress.connect(self.on_indexing_progress)
@@ -3252,12 +3252,12 @@ class KaraokeApp(QWidget):
         self.indexer_worker.start()
 
     def on_indexing_progress(self, current, total):
-        pct = int((current / total) * 100) if total > 0 else 0
-        self.index_progress_bar.setValue(pct)
-        self.status_lbl.setText(f"Indexing songs: {current:,} / {total:,}")
+        self.indexing_progress = (current, total)
+        if hasattr(self, "status_lbl"):
+            self.status_lbl.setText(f"Indexing songs: {current:,} / {total:,}")
 
     def on_indexing_finished(self, count, soundfont, backgrounds, read_only_msg, db_path):
-        self.index_progress_bar.hide()
+        self.indexing_progress = (count, count)
 
         try:
             self.db = SongDatabase(db_path)
@@ -3275,7 +3275,8 @@ class KaraokeApp(QWidget):
             dir_name = first_dir.name if not isinstance(self.songs_dir, (list, tuple)) else f"{len(self.songs_dir)} sources"
         else:
             dir_name = "disconnected source"
-        self.status_lbl.setText(f"Loaded from {dir_name}{read_only_msg}")
+        if hasattr(self, "status_lbl"):
+            self.status_lbl.setText(f"Loaded from {dir_name}{read_only_msg}")
 
         if self.stack.currentWidget() == self.no_usb_page:
             self.stack.setCurrentWidget(self.library_page)
@@ -3312,7 +3313,8 @@ class KaraokeApp(QWidget):
     def clear_reservation_queue(self):
         self.reservation_queue.clear()
         self.update_queue_ui()
-        self.status_lbl.setText("Reservation queue cleared.")
+        if hasattr(self, "status_lbl"):
+            self.status_lbl.setText("Reservation queue cleared.")
 
     def play_next_reserved_song(self):
         if self.reservation_queue:
@@ -3338,7 +3340,8 @@ class KaraokeApp(QWidget):
     def adjust_key(self, delta):
         self.pitch_key = max(-6, min(6, self.pitch_key + delta))
         self.refresh_chips()
-        self.status_lbl.setText(f"Key set to {self.pitch_key:+d}")
+        if hasattr(self, "status_lbl"):
+            self.status_lbl.setText(f"Key set to {self.pitch_key:+d}")
         self.toast.flash(f"Key  {self.pitch_key:+d}", 1400)
         if self.is_playing and self.current_song:
             code, title, artist, filepath = self.current_song
@@ -3348,7 +3351,8 @@ class KaraokeApp(QWidget):
         self.tempo_multiplier = max(0.5, min(1.5, round(self.tempo_multiplier + delta, 2)))
         tempo_pct = int(round(self.tempo_multiplier * 100))
         self.refresh_chips()
-        self.status_lbl.setText(f"Tempo set to {tempo_pct}%")
+        if hasattr(self, "status_lbl"):
+            self.status_lbl.setText(f"Tempo set to {tempo_pct}%")
         self.toast.flash(f"Tempo  {tempo_pct}%", 1400)
         if self.is_playing and self.current_song:
             code, title, artist, filepath = self.current_song

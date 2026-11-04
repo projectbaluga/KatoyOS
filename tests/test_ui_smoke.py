@@ -49,6 +49,28 @@ def _pump(app, ms):
         app.processEvents()
 
 
+def test_start_async_indexing_no_widgets_crash(kk, qapp, tmp_path):
+    songs_dir = tmp_path / "songs"
+    songs_dir.mkdir()
+    cfg = kk.load_config()
+    cfg.update({"REMOTE_ENABLED": "0", "SONGS_DIR": str(songs_dir), "FULLSCREEN": "0", "KIOSK": "1"})
+    w = kk.KaraokeApp(cfg)
+    w.show()
+    w.start_async_indexing(force=True)
+    _pump(qapp, 100)
+    w.on_indexing_progress(5, 10)
+    assert w.indexing_progress == (5, 10)
+    w.on_indexing_finished(10, None, [], "", str(songs_dir / ".katoy-karaoke.db"))
+    assert w.indexing_progress == (10, 10)
+
+    # Remote actions should not crash with missing widgets
+    w.adjust_key(1)
+    w.adjust_tempo(0.1)
+    w.clear_reservation_queue()
+    w.set_pause_button(True)
+    _dispose(qapp, w)
+
+
 def test_window_constructs_and_survives_startup(kk, qapp):
     cfg = kk.load_config()
     cfg.update({"REMOTE_ENABLED": "0", "SONGS_DIR": "/nonexistent-usb", "FULLSCREEN": "0", "KIOSK": "1"})

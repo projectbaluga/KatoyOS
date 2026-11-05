@@ -28,7 +28,7 @@ directly onto this partition from Windows, Mac, or Linux.
 Foldering suggestions:
   - /songs/        : Put MIDI / KAR karaoke files here
   - /soundfonts/   : Custom SoundFont (.sf2) files
-  - /backgrounds/  : Custom background images (.png / .jpg)
+  - /backgrounds/  : Custom background images (.png / .jpg) or videos (.mp4, .mkv, .webm, 720p H.264 recommended for Pi 3B)
 "
 
 log() { echo "$(date '+%F %T') $*" | tee -a "$LOG" >&2; }

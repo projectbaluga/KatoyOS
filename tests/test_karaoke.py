@@ -167,3 +167,24 @@ def test_calculate_elapsed_seconds():
     assert calc_fn(1000, 1000, 180.0) == 180.0
     assert calc_fn(-10, 1000, 180.0) == 0.0
     assert calc_fn(1500, 1000, 180.0) == 180.0
+
+
+def test_video_and_image_background_discovery():
+    find_bg_fn = kk["find_backgrounds"]
+    tmpdir = Path(tempfile.mkdtemp())
+    try:
+        bg_dir = tmpdir / "backgrounds"
+        bg_dir.mkdir()
+        (bg_dir / "beach.jpg").write_text("fake image")
+        (bg_dir / "ocean.mp4").write_text("fake video")
+        (bg_dir / "waves.mkv").write_text("fake video")
+        (bg_dir / "notes.txt").write_text("not media")
+
+        found = find_bg_fn(bg_dir, None)
+        names = [p.name for p in found]
+        assert "beach.jpg" in names
+        assert "ocean.mp4" in names
+        assert "waves.mkv" in names
+        assert "notes.txt" not in names
+    finally:
+        shutil.rmtree(tmpdir)

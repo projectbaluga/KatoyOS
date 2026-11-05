@@ -303,6 +303,9 @@ class PersistentFluidSynth:
 
 CONFIG_FILE = Path("/etc/katoyos/karaoke.conf")
 DEFAULT_WALLPAPER = Path("/usr/share/backgrounds/katoyos/default.png")
+IMAGE_EXTS = (".png", ".jpg", ".jpeg")
+VIDEO_EXTS = (".mp4", ".mkv", ".avi", ".mov", ".webm")
+SUPPORTED_BG_EXTS = IMAGE_EXTS + VIDEO_EXTS
 SYSTEM_SOUNDFONTS = [
     Path("/usr/share/sounds/sf2/TimGM6mb.sf2"),
     Path("/usr/share/sounds/sf2/FluidR3_GM.sf2"),
@@ -816,6 +819,7 @@ button{width:100%;margin-top:22px;border:0;font-weight:800;background:linear-gra
 <label for="MIC_ENABLED">Microphone Input</label><select id="MIC_ENABLED" name="MIC_ENABLED">__MIC_ENABLED_OPTS__</select>
 <label for="MIC_REVERB">Microphone Reverb</label><select id="MIC_REVERB" name="MIC_REVERB">__MIC_REVERB_OPTS__</select>
 <label for="SCORING_MODE">Scoring Mode</label><select id="SCORING_MODE" name="SCORING_MODE">__SCORING_MODE_OPTS__</select>
+<label for="LYRIC_OFFSET">Lyric Timing Offset (seconds, -2.0 to +2.0)</label><input type="number" id="LYRIC_OFFSET" name="LYRIC_OFFSET" min="-2.0" max="2.0" step="0.1" value="__LYRIC_OFFSET__">
 <button type="submit" id="save_btn">Save Settings</button>
 <div id="msg"></div>
 </form>
@@ -924,12 +928,17 @@ class RemoteRequestHandler(BaseHTTPRequestHandler):
         changed = {}
         restart_hotspot = False
 
-        for key in ("HOTSPOT_SSID", "HOTSPOT_PASSWORD", "REMOTE_PIN", "MIC_VOLUME", "MUSIC_VOLUME", "MIC_ENABLED", "MIC_REVERB", "SCORING_MODE"):
+        for key in ("HOTSPOT_SSID", "HOTSPOT_PASSWORD", "REMOTE_PIN", "MIC_VOLUME", "MUSIC_VOLUME", "MIC_ENABLED", "MIC_REVERB", "SCORING_MODE", "LYRIC_OFFSET"):
             if key in params:
                 val = params[key][0].strip()
                 if key in ("MIC_VOLUME", "MUSIC_VOLUME"):
                     try:
                         val = str(max(0, min(100, int(val))))
+                    except ValueError:
+                        continue
+                elif key == "LYRIC_OFFSET":
+                    try:
+                        val = f"{max(-2.0, min(2.0, float(val))):.1f}"
                     except ValueError:
                         continue
                 if key in ("HOTSPOT_SSID", "HOTSPOT_PASSWORD") and cfg.get(key) != val:
@@ -976,18 +985,24 @@ class RemoteRequestHandler(BaseHTTPRequestHandler):
                 print(f"Error saving config to {target_conf}: {e}")
 
         # Apply live changes
-        if app and hasattr(app, "mic_manager") and app.mic_manager:
-            try:
-                if "MIC_VOLUME" in changed:
-                    app.mic_manager.set_mic_volume(int(changed["MIC_VOLUME"]))
-                if "MUSIC_VOLUME" in changed:
-                    app.mic_manager.set_music_volume(int(changed["MUSIC_VOLUME"]))
-                if "MIC_ENABLED" in changed or "MIC_REVERB" in changed:
-                    app.mic_manager.mic_enabled = (cfg.get("MIC_ENABLED", "1") == "1")
-                    app.mic_manager.reverb_enabled = (cfg.get("MIC_REVERB", "0") == "1")
-                    app.mic_manager.apply_settings()
-            except Exception as e:
-                print(f"Error applying audio settings: {e}")
+        if app:
+            if "LYRIC_OFFSET" in changed:
+                try:
+                    app.lyric_offset = float(changed["LYRIC_OFFSET"])
+                except ValueError:
+                    pass
+            if hasattr(app, "mic_manager") and app.mic_manager:
+                try:
+                    if "MIC_VOLUME" in changed:
+                        app.mic_manager.set_mic_volume(int(changed["MIC_VOLUME"]))
+                    if "MUSIC_VOLUME" in changed:
+                        app.mic_manager.set_music_volume(int(changed["MUSIC_VOLUME"]))
+                    if "MIC_ENABLED" in changed or "MIC_REVERB" in changed:
+                        app.mic_manager.mic_enabled = (cfg.get("MIC_ENABLED", "1") == "1")
+                        app.mic_manager.reverb_enabled = (cfg.get("MIC_REVERB", "0") == "1")
+                        app.mic_manager.apply_settings()
+                except Exception as e:
+                    print(f"Error applying audio settings: {e}")
 
         if restart_hotspot:
             try:
@@ -1020,6 +1035,8 @@ class RemoteRequestHandler(BaseHTTPRequestHandler):
         page = page.replace("__SCORING_MODE_OPTS__",
             f"<option value='real'{' selected' if sm=='real' else ''}>Real (Microphone energy)</option>"
             f"<option value='fun'{' selected' if sm=='fun' else ''}>Fun (Random 88-100)</option>")
+
+        page = page.replace("__LYRIC_OFFSET__", html.escape(str(cfg.get("LYRIC_OFFSET", "0.0")), quote=True))
 
         self.send_html(page)
 
@@ -1157,7 +1174,7 @@ class RemoteRequestHandler(BaseHTTPRequestHandler):
                 self.bridge_signals.toggle_pause.emit()
             self.send_json({"status": "ok"})
         elif path == "/settings":
-            if any(k in params for k in ("HOTSPOT_SSID", "HOTSPOT_PASSWORD", "REMOTE_PIN", "MIC_VOLUME", "MUSIC_VOLUME", "MIC_ENABLED", "MIC_REVERB", "SCORING_MODE")):
+            if any(k in params for k in ("HOTSPOT_SSID", "HOTSPOT_PASSWORD", "REMOTE_PIN", "MIC_VOLUME", "MUSIC_VOLUME", "MIC_ENABLED", "MIC_REVERB", "SCORING_MODE", "LYRIC_OFFSET")):
                 self._apply_settings_update(params)
             else:
                 self._serve_settings_page()
@@ -1301,6 +1318,7 @@ def load_config(usb_dir=None):
         "HOTSPOT_GRACE": "45",
         "HOTSPOT_IFNAME": "wlan0",
         "SCORING_MODE": "real",
+        "LYRIC_OFFSET": "0.0",
     }
     if CONFIG_FILE.exists():
         try:
@@ -1405,20 +1423,20 @@ def find_backgrounds(configured_path, usb_dir):
     bg_list = []
     if configured_path:
         p = Path(configured_path)
-        if p.is_file() and p.suffix.lower() in (".png", ".jpg", ".jpeg"):
+        if p.is_file() and p.suffix.lower() in SUPPORTED_BG_EXTS:
             return [p]
         elif p.is_dir():
-            bg_list = [f for f in p.iterdir() if f.suffix.lower() in (".png", ".jpg", ".jpeg")]
+            bg_list = [f for f in p.iterdir() if f.suffix.lower() in SUPPORTED_BG_EXTS]
             if bg_list:
                 return sorted(bg_list)
 
     if usb_dir and usb_dir.exists():
         usb_root = usb_dir.parent if usb_dir.name in ("songs", "karaoke", "midi", "kar", "SONGS", "KARAOKE", "MIDI", "KAR") else usb_dir
-        for cand in [usb_root / "backgrounds", usb_root / "images", usb_root / "wallpapers"]:
+        for cand in [usb_root / "backgrounds", usb_root / "images", usb_root / "wallpapers", usb_root / "videos"]:
             if cand.is_dir():
-                imgs = [f for f in cand.iterdir() if f.suffix.lower() in (".png", ".jpg", ".jpeg")]
-                if imgs:
-                    return sorted(imgs)
+                items = [f for f in cand.iterdir() if f.suffix.lower() in SUPPORTED_BG_EXTS]
+                if items:
+                    return sorted(items)
 
     if DEFAULT_WALLPAPER.exists():
         return [DEFAULT_WALLPAPER]
@@ -2198,12 +2216,11 @@ class LyricLineWidget(QWidget):
 
         if self.mode == "current":
             self._pix_base = render(QBrush(QColor(255, 255, 255)))
-            g = QLinearGradient(0, base - px, 0, base + px * 0.25)
-            g.setColorAt(0, QColor(255, 232, 130))
-            g.setColorAt(1, QColor(255, 61, 143))
-            self._pix_sung = render(QBrush(g))
+            # Classic Philippine videoke bright solid yellow sung wipe
+            self._pix_sung = render(QBrush(QColor(255, 235, 59)))
         else:
-            self._pix_base = render(QBrush(QColor(255, 255, 255, 150)))
+            # Readable brightened light gray/white for next line preview
+            self._pix_base = render(QBrush(QColor(220, 225, 240, 200)))
 
     def paintEvent(self, ev):
         if self._dirty:
@@ -2474,6 +2491,11 @@ class KaraokeApp(QWidget):
         self._cover_src = None
         self._cover_cache = None
         self._lyric_idx = -2
+        self.bg_video_proc = None
+        try:
+            self.lyric_offset = float(self.config.get("LYRIC_OFFSET", "0.0"))
+        except ValueError:
+            self.lyric_offset = 0.0
         self.net_ip = ""
         self.net_ap = False
         self.net_ssid = ""
@@ -2506,10 +2528,6 @@ class KaraokeApp(QWidget):
         self.score_timer = QTimer(self)
         self.score_timer.setSingleShot(True)
         self.score_timer.timeout.connect(self.hide_score_banner_and_next)
-
-        self.controls_timer = QTimer(self)
-        self.controls_timer.setSingleShot(True)
-        self.controls_timer.timeout.connect(self.hide_controls)
 
         self.remote_signals = RemoteBridgeSignals()
         self.remote_signals.reserve_song.connect(self.on_remote_reserve_song)
@@ -2857,7 +2875,8 @@ class KaraokeApp(QWidget):
         left.addWidget(guide_card)
         left.addStretch()
 
-        self.status_lbl = QLabel("Ready")
+        self.status_lbl = QLabel("Ready", w)
+        self.status_lbl.hide()
 
         # right: Up next queue list card (read-only display)
         q_card = QFrame()
@@ -2937,14 +2956,11 @@ class KaraokeApp(QWidget):
         lv.setContentsMargins(0, 0, 0, 0)
         lv.setSpacing(S(6))
         lv.setAlignment(Qt.AlignmentFlag.AlignVCenter)
-        self.lyric_prev_lbl = LyricLineWidget(38, "dim")
         self.lyric_curr_lbl = LyricLineWidget(78, "current")
-        self.lyric_next_lbl = LyricLineWidget(46, "dim")
+        self.lyric_next_lbl = LyricLineWidget(58, "dim")
         lv.addStretch(1)
-        lv.addWidget(self.lyric_prev_lbl)
-        lv.addSpacing(S(8))
         lv.addWidget(self.lyric_curr_lbl)
-        lv.addSpacing(S(8))
+        lv.addSpacing(S(12))
         lv.addWidget(self.lyric_next_lbl)
         lv.addStretch(1)
 
@@ -2974,10 +2990,6 @@ class KaraokeApp(QWidget):
         self.progress_bar = QProgressBar()
         self.progress_bar.setTextVisible(False)
         lay.addWidget(self.progress_bar)
-
-        self.controls_card = QFrame()
-        self.controls_card.hide()
-        self.pause_btn = QPushButton()
 
         self._set_next_up()
         return w
@@ -3173,23 +3185,6 @@ class KaraokeApp(QWidget):
             self.sys_songs_val.setText(f"{self.song_count:,} songs" if self.songs_dir else "no USB drive")
         self.update()
 
-    # ── controls auto-hide (clean lyric screen while singing) ──────────────────────
-    def eventFilter(self, obj, ev):
-        if ev.type() in (QEvent.Type.KeyPress, QEvent.Type.MouseMove, QEvent.Type.MouseButtonPress):
-            if self.stack.currentWidget() is self.player_page:
-                self.poke_controls()
-        return False
-
-    def poke_controls(self):
-        if not hasattr(self, "controls_card"):
-            return
-        self.controls_card.show()
-        self.controls_timer.start(7000)
-
-    def hide_controls(self):
-        if self.is_playing and not self.is_paused and self.stack.currentWidget() is self.player_page:
-            self.controls_card.hide()
-
     def hide_score(self):
         self.center_stack.setCurrentIndex(0)
 
@@ -3334,8 +3329,7 @@ class KaraokeApp(QWidget):
         self.tempo_lbl.setText(f"TEMPO {int(round(self.tempo_multiplier * 100))}%")
 
     def set_pause_button(self, paused):
-        if hasattr(self, "pause_btn") and self.pause_btn:
-            self.pause_btn.setText("Resume" if paused else "Pause")
+        pass
 
     def adjust_key(self, delta):
         self.pitch_key = max(-6, min(6, self.pitch_key + delta))
@@ -3509,8 +3503,6 @@ class KaraokeApp(QWidget):
         self.is_paused = False
         self.current_song = None
         self.hide_score()
-        self.controls_timer.stop()
-        self.controls_card.show()
 
         if self.stack.currentWidget() == self.player_page:
             self.stack.setCurrentWidget(self.library_page)
@@ -3560,7 +3552,8 @@ class KaraokeApp(QWidget):
         pct = int((elapsed / dur) * 100)
         self.progress_bar.setValue(min(100, pct))
 
-        self.render_lyrics(elapsed)
+        eff_elapsed = max(0.0, elapsed + getattr(self, "lyric_offset", 0.0))
+        self.render_lyrics(eff_elapsed)
 
     def _segments_for_line(self, idx):
         line = self.lyrics_lines[idx]
@@ -3578,15 +3571,39 @@ class KaraokeApp(QWidget):
             segs.append((syl['text'], start, max(end, start + 0.05)))
         return segs or [(line['text'], line['start_sec'], line['start_sec'] + 1.5)]
 
+    def _line_end_sec(self, idx):
+        line = self.lyrics_lines[idx]
+        syls = line.get('syllables', [])
+        nxt = self.lyrics_lines[idx + 1]['start_sec'] if idx + 1 < len(self.lyrics_lines) else None
+        if syls:
+            end = syls[-1]['sec'] + 1.0
+            if nxt is not None:
+                end = min(end, max(syls[-1]['sec'] + 0.2, nxt))
+            return max(end, line['start_sec'] + 0.5)
+        return (nxt if nxt is not None else line['start_sec'] + 2.0)
+
     def render_lyrics(self, elapsed_sec):
         if not self.lyrics_lines:
             if self._lyric_idx != -3:
                 self._lyric_idx = -3
-                self.lyric_prev_lbl.set_text("")
                 self.lyric_curr_lbl.set_text("♪   Instrumental   ♪")
                 self.lyric_next_lbl.set_text("")
             return
 
+        n = len(self.lyrics_lines)
+        first_start = self.lyrics_lines[0]['start_sec']
+
+        # Intro gap: before first lyric line
+        if elapsed_sec < first_start:
+            rem = first_start - elapsed_sec
+            intro_text = f"♪   ♪   ♪   Instrumental ({int(rem)}s)   ♪   ♪   ♪" if rem >= 4.0 else "♪   ♪   ♪   Instrumental   ♪   ♪   ♪"
+            if self._lyric_idx != -1 or self.lyric_curr_lbl._segs != [(intro_text, 0.0, 0.0)]:
+                self._lyric_idx = -1
+                self.lyric_curr_lbl.set_text(intro_text)
+                self.lyric_next_lbl.set_text(self.lyrics_lines[0]['text'])
+            return
+
+        # Find active or most recent line index
         curr_idx = -1
         for idx, line in enumerate(self.lyrics_lines):
             if elapsed_sec >= line['start_sec']:
@@ -3594,20 +3611,41 @@ class KaraokeApp(QWidget):
             else:
                 break
 
+        line_end = self._line_end_sec(curr_idx)
+        nxt_start = self.lyrics_lines[curr_idx + 1]['start_sec'] if curr_idx + 1 < n else None
+
+        # Interlude gap: after line finishes and before next line starts
+        if nxt_start is not None and elapsed_sec >= line_end:
+            rem = nxt_start - elapsed_sec
+            if rem >= 1.0:
+                gap_text = f"♪   ♪   ♪   Instrumental ({int(rem)}s)   ♪   ♪   ♪" if rem >= 4.0 else "♪   ♪   ♪   Instrumental   ♪   ♪   ♪"
+                gap_key = -100 - (curr_idx + 1)
+                if self._lyric_idx != gap_key or self.lyric_curr_lbl._segs != [(gap_text, 0.0, 0.0)]:
+                    self._lyric_idx = gap_key
+                    self.lyric_curr_lbl.set_text(gap_text)
+                    self.lyric_next_lbl.set_text(self.lyrics_lines[curr_idx + 1]['text'])
+                return
+
+        # Active line
         if curr_idx != self._lyric_idx:
             self._lyric_idx = curr_idx
-            n = len(self.lyrics_lines)
-            if curr_idx == -1:
-                self.lyric_prev_lbl.set_text("")
-                self.lyric_curr_lbl.set_text("♪   ♪   ♪")
-                self.lyric_next_lbl.set_text(self.lyrics_lines[0]['text'])
-            else:
-                self.lyric_prev_lbl.set_text(self.lyrics_lines[curr_idx - 1]['text'] if curr_idx > 0 else "")
-                self.lyric_curr_lbl.set_syllables(self._segments_for_line(curr_idx))
-                self.lyric_next_lbl.set_text(self.lyrics_lines[curr_idx + 1]['text'] if curr_idx + 1 < n else "")
+            self.lyric_curr_lbl.set_syllables(self._segments_for_line(curr_idx))
+            self.lyric_next_lbl.set_text(self.lyrics_lines[curr_idx + 1]['text'] if curr_idx + 1 < n else "")
 
         if curr_idx >= 0:
             self.lyric_curr_lbl.set_elapsed(elapsed_sec)
+
+    def stop_bg_video(self):
+        if self.bg_video_proc:
+            try:
+                self.bg_video_proc.terminate()
+                self.bg_video_proc.wait(timeout=0.3)
+            except Exception:
+                try:
+                    self.bg_video_proc.kill()
+                except Exception:
+                    pass
+            self.bg_video_proc = None
 
     def rotate_background(self):
         if len(self.backgrounds) > 1:
@@ -3615,14 +3653,40 @@ class KaraokeApp(QWidget):
             self.update_background_image()
 
     def update_background_image(self):
+        self.stop_bg_video()
         self._cover_cache = None
         self._cover_src = None
-        if self.backgrounds:
-            path = self.backgrounds[self.bg_index % len(self.backgrounds)]
-            if path.exists():
-                pix = QPixmap(str(path))
-                if not pix.isNull():
-                    self._cover_src = pix
+        if not self.backgrounds:
+            self.update()
+            return
+
+        path = self.backgrounds[self.bg_index % len(self.backgrounds)]
+        if not path.exists():
+            self.update()
+            return
+
+        is_video = path.suffix.lower() in VIDEO_EXTS
+        on_idle = (self.stack.currentWidget() is self.library_page or self.stack.currentWidget() is self.no_usb_page)
+
+        if is_video and on_idle and not self.is_playing and shutil.which("mpv"):
+            try:
+                wid = str(int(self.winId()))
+                cmd = [
+                    "mpv",
+                    "--no-audio",
+                    "--loop-file=inf",
+                    "--really-quiet",
+                    f"--wid={wid}",
+                    str(path)
+                ]
+                self.bg_video_proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            except Exception as e:
+                print(f"Error launching background video via mpv: {e}")
+                self.bg_video_proc = None
+        elif not is_video:
+            pix = QPixmap(str(path))
+            if not pix.isNull():
+                self._cover_src = pix
         self.update()
 
     def on_escape_pressed(self):
@@ -3636,10 +3700,11 @@ class KaraokeApp(QWidget):
 
     def closeEvent(self, event):
         # Detach everything that can call back into this window while it is being torn down.
+        self.stop_bg_video()
         app = QApplication.instance()
         if app:
             app.removeEventFilter(self)
-        for tm in (self.poll_timer, self.play_timer, self.bg_timer, self.score_timer, self.controls_timer):
+        for tm in (self.poll_timer, self.play_timer, self.bg_timer, self.score_timer):
             tm.stop()
         if self.net_watcher:
             self.net_watcher.stop()

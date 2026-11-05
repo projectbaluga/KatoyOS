@@ -57,12 +57,16 @@ for u in dhcpcd.service dhcpcd5.service; do
 done
 systemctl enable NetworkManager.service || true
 
-# Ensure wlan0 is dedicated to the hostapd AP and not managed by NetworkManager
-mkdir -p /etc/NetworkManager/conf.d
-cat > /etc/NetworkManager/conf.d/99-katoy-ap.conf <<'EOF'
-[keyfile]
-unmanaged-devices=interface-name:wlan0
+# Configure NetworkManager: managed=true under [ifupdown] and do not exclude wlan0
+mkdir -p /etc/NetworkManager
+cat > /etc/NetworkManager/NetworkManager.conf <<'EOF'
+[main]
+plugins=ifupdown,keyfile
+
+[ifupdown]
+managed=true
 EOF
+rm -f /etc/NetworkManager/conf.d/99-katoy-ap.conf
 CHEOF
 
 # Keep the journal in RAM to spare the SD card

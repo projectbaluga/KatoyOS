@@ -2,6 +2,20 @@ name: Build KatoyOS Image
 
 on:
   workflow_dispatch:
+    inputs:
+      os_name:
+        description: 'OS name text for Plymouth splash'
+        type: string
+        default: 'KatoyOS'
+      tagline:
+        description: 'Tagline text for Plymouth splash'
+        type: string
+        default: ''
+      logo_base64:
+        description: 'Base64-encoded PNG logo image to override the default brand logo'
+        type: string
+        required: false
+        default: ''
   push:
     tags:
       - 'v*'
@@ -23,6 +37,24 @@ jobs:
       - name: Run unit tests
         run: |
           pytest tests/
+
+      - name: Configure Plymouth boot splash
+        if: github.event_name == 'workflow_dispatch'
+        run: |
+          LOGO_ARG="--logo assets/katoyos-brand.png"
+          if [ -n "${{ inputs.logo_base64 }}" ]; then
+            TMP_LOGO=$(mktemp /tmp/custom-logo-XXXXXX.png)
+            echo "${{ inputs.logo_base64 }}" | base64 -d > "$TMP_LOGO"
+            LOGO_ARG="--logo $TMP_LOGO"
+          fi
+          python3 tools/make-splash.py \
+            $LOGO_ARG \
+            --name "${{ inputs.os_name }}" \
+            --tagline "${{ inputs.tagline }}" \
+            --out stage-katoy/01-branding/files/plymouth-splash.png
+          if [ -n "$TMP_LOGO" ] && [ -f "$TMP_LOGO" ]; then
+            rm -f "$TMP_LOGO"
+          fi
 
       - name: Build KatoyOS
         run: |

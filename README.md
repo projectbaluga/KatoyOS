@@ -193,6 +193,11 @@ The default `config` builds the karaoke appliance. To build the optional LXQt de
 
 A GitHub Actions workflow is provided in `.github/workflows/build.yml`. It runs on version tags (`v*`) or manual `workflow_dispatch` triggers and produces downloadable build artifacts.
 
+When manually triggered via `workflow_dispatch`, the boot splash can be configured without modifying repo files using the following optional inputs:
+- **`os_name`**: OS name text displayed in bold on the Plymouth splash screen (defaults to `KatoyOS`).
+- **`tagline`**: Optional tagline text displayed beneath the OS name (defaults to empty).
+- **`logo_base64`**: Optional base64-encoded PNG image to override the default brand logo on the splash screen.
+
 ---
 
 ## Flashing KatoyOS
@@ -222,6 +227,7 @@ katoyos/
 │   ├── katoyos-karaoke-library-preview.png
 ├── tools/
 │   ├── make-assets.py                Branding asset generator
+│   ├── make-splash.py                Customizable boot splash generator
 │   └── test-stage.sh                 Stage verification test harness
 ├── docs/
 │   ├── DECISIONS.md                  Technical decisions log

@@ -335,3 +335,52 @@ def test_video_background_lifecycle_helpers():
     # Idempotent stop
     app_class.stop_background_video(fake)
     assert fake.bg_video_proc is None
+
+
+def test_auto_hdmi_sink_selection(monkeypatch):
+    """Verify MicrophoneChainManager.select_output_sink auto-detects HDMI sinks."""
+    MicManager = kk["MicrophoneChainManager"]
+    mm = MicManager({"OUTPUT_DEVICE": "auto", "MUSIC_VOLUME": "90"})
+
+    sinks_output = "0\talsa_output.platform-bcm2835_audio.analog-stereo\tPipeWire\ts16le 2ch 48000Hz\tSUSPENDED\n1\talsa_output.platform-bcm2835_audio.hdmi-stereo\tPipeWire\ts16le 2ch 48000Hz\tRUNNING\n"
+
+    commands_run = []
+    def mock_run(args, **kwargs):
+        commands_run.append(args)
+        if args == ["pactl", "list", "short", "sinks"]:
+            return type("Res", (), {"returncode": 0, "stdout": sinks_output, "stderr": ""})()
+        return type("Res", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+
+    monkeypatch.setattr("shutil.which", lambda cmd: "/usr/bin/" + cmd)
+    monkeypatch.setattr("subprocess.run", mock_run)
+
+    chosen = mm.select_output_sink()
+    assert chosen == "alsa_output.platform-bcm2835_audio.hdmi-stereo"
+    assert mm.current_sink == "alsa_output.platform-bcm2835_audio.hdmi-stereo"
+
+    # Verify pactl commands were sent to configure sink
+    assert ["pactl", "set-default-sink", "alsa_output.platform-bcm2835_audio.hdmi-stereo"] in commands_run
+    assert ["pactl", "set-sink-mute", "alsa_output.platform-bcm2835_audio.hdmi-stereo", "0"] in commands_run
+    assert ["pactl", "set-sink-volume", "alsa_output.platform-bcm2835_audio.hdmi-stereo", "90%"] in commands_run
+
+
+def test_explicit_sink_selection(monkeypatch):
+    """Verify selecting 3.5mm headphone jack selects analog sink."""
+    MicManager = kk["MicrophoneChainManager"]
+    mm = MicManager({"OUTPUT_DEVICE": "3.5mm", "MUSIC_VOLUME": "75"})
+
+    sinks_output = "0\talsa_output.platform-bcm2835_audio.analog-stereo\tPipeWire\ts16le 2ch 48000Hz\tSUSPENDED\n1\talsa_output.platform-bcm2835_audio.hdmi-stereo\tPipeWire\ts16le 2ch 48000Hz\tRUNNING\n"
+
+    commands_run = []
+    def mock_run(args, **kwargs):
+        commands_run.append(args)
+        if args == ["pactl", "list", "short", "sinks"]:
+            return type("Res", (), {"returncode": 0, "stdout": sinks_output, "stderr": ""})()
+        return type("Res", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+
+    monkeypatch.setattr("shutil.which", lambda cmd: "/usr/bin/" + cmd)
+    monkeypatch.setattr("subprocess.run", mock_run)
+
+    chosen = mm.select_output_sink()
+    assert chosen == "alsa_output.platform-bcm2835_audio.analog-stereo"
+    assert mm.current_sink == "alsa_output.platform-bcm2835_audio.analog-stereo"

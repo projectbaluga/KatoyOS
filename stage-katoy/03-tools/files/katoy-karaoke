@@ -835,6 +835,7 @@ button{width:100%;margin-top:22px;border:0;font-weight:800;background:linear-gra
 <label for="MUSIC_VOLUME">Music Volume (0-100)</label><input type="number" id="MUSIC_VOLUME" name="MUSIC_VOLUME" min="0" max="100" value="__MUSIC_VOLUME__">
 <label for="MIC_ENABLED">Microphone Input</label><select id="MIC_ENABLED" name="MIC_ENABLED">__MIC_ENABLED_OPTS__</select>
 <label for="MIC_REVERB">Microphone Reverb</label><select id="MIC_REVERB" name="MIC_REVERB">__MIC_REVERB_OPTS__</select>
+<label for="OUTPUT_DEVICE">Audio Output Device</label><select id="OUTPUT_DEVICE" name="OUTPUT_DEVICE">__OUTPUT_DEVICE_OPTS__</select>
 <label for="LYRIC_OFFSET">Lyric Timing Offset (seconds, -2.0 to +2.0)</label><input type="number" id="LYRIC_OFFSET" name="LYRIC_OFFSET" min="-2.0" max="2.0" step="0.1" value="__LYRIC_OFFSET__">
 <label for="SCORING_MODE">Scoring Mode</label><select id="SCORING_MODE" name="SCORING_MODE">__SCORING_MODE_OPTS__</select>
 <button type="submit" id="save_btn">Save Settings</button>
@@ -945,7 +946,7 @@ class RemoteRequestHandler(BaseHTTPRequestHandler):
         changed = {}
         restart_hotspot = False
 
-        for key in ("HOTSPOT_SSID", "HOTSPOT_PASSWORD", "REMOTE_PIN", "MIC_VOLUME", "MUSIC_VOLUME", "MIC_ENABLED", "MIC_REVERB", "SCORING_MODE", "LYRIC_OFFSET"):
+        for key in ("HOTSPOT_SSID", "HOTSPOT_PASSWORD", "REMOTE_PIN", "MIC_VOLUME", "MUSIC_VOLUME", "MIC_ENABLED", "MIC_REVERB", "SCORING_MODE", "LYRIC_OFFSET", "OUTPUT_DEVICE"):
             if key in params:
                 val = params[key][0].strip()
                 if key in ("MIC_VOLUME", "MUSIC_VOLUME"):
@@ -1014,6 +1015,8 @@ class RemoteRequestHandler(BaseHTTPRequestHandler):
                         app.mic_manager.set_mic_volume(int(changed["MIC_VOLUME"]))
                     if "MUSIC_VOLUME" in changed:
                         app.mic_manager.set_music_volume(int(changed["MUSIC_VOLUME"]))
+                    if "OUTPUT_DEVICE" in changed:
+                        app.mic_manager.set_output_device(changed["OUTPUT_DEVICE"])
                     if "MIC_ENABLED" in changed or "MIC_REVERB" in changed:
                         app.mic_manager.mic_enabled = (cfg.get("MIC_ENABLED", "1") == "1")
                         app.mic_manager.reverb_enabled = (cfg.get("MIC_REVERB", "0") == "1")
@@ -1053,6 +1056,12 @@ class RemoteRequestHandler(BaseHTTPRequestHandler):
         page = page.replace("__SCORING_MODE_OPTS__",
             f"<option value='real'{' selected' if sm=='real' else ''}>Real (Microphone energy)</option>"
             f"<option value='fun'{' selected' if sm=='fun' else ''}>Fun (Random 88-100)</option>")
+
+        od = str(cfg.get("OUTPUT_DEVICE", "auto")).lower()
+        page = page.replace("__OUTPUT_DEVICE_OPTS__",
+            f"<option value='auto'{' selected' if od=='auto' else ''}>Auto (HDMI preferred)</option>"
+            f"<option value='hdmi'{' selected' if od=='hdmi' else ''}>HDMI</option>"
+            f"<option value='3.5mm'{' selected' if od in ('3.5mm', 'analog', 'headphones') else ''}>3.5mm Headphone Jack</option>")
 
         self.send_html(page)
 
@@ -1195,7 +1204,7 @@ class RemoteRequestHandler(BaseHTTPRequestHandler):
                 self.bridge_signals.toggle_pause.emit()
             self.send_json({"status": "ok"})
         elif path == "/settings":
-            if any(k in params for k in ("HOTSPOT_SSID", "HOTSPOT_PASSWORD", "REMOTE_PIN", "MIC_VOLUME", "MUSIC_VOLUME", "MIC_ENABLED", "MIC_REVERB", "SCORING_MODE", "LYRIC_OFFSET")):
+            if any(k in params for k in ("HOTSPOT_SSID", "HOTSPOT_PASSWORD", "REMOTE_PIN", "MIC_VOLUME", "MUSIC_VOLUME", "MIC_ENABLED", "MIC_REVERB", "SCORING_MODE", "LYRIC_OFFSET", "OUTPUT_DEVICE")):
                 self._apply_settings_update(params)
             else:
                 self._serve_settings_page()
@@ -1261,6 +1270,78 @@ class MicrophoneChainManager:
         self.reverb_enabled = (config.get("MIC_REVERB", "1") == "1")
         self.mic_enabled = (config.get("MIC_ENABLED", "1") == "1")
         self.output_device = config.get("OUTPUT_DEVICE", "auto")
+        self.current_sink = None
+        self._sink_warned = False
+
+    def select_output_sink(self, target_device=None):
+        """Resolves target sink (preferring HDMI under 'auto'/'hdmi' or analog under '3.5mm') and configures it."""
+        if target_device is not None:
+            self.output_device = target_device
+        if not shutil.which("pactl"):
+            return None
+
+        dev = self.output_device.strip().lower()
+        try:
+            res = subprocess.run(["pactl", "list", "short", "sinks"], capture_output=True, text=True, timeout=3)
+            if res.returncode != 0:
+                return None
+            sinks = []
+            for line in res.stdout.splitlines():
+                parts = line.strip().split()
+                if len(parts) >= 2:
+                    sinks.append(parts[1])
+        except Exception:
+            return None
+
+        if not sinks:
+            if not self._sink_warned:
+                print("Warning: No audio sinks found via pactl list short sinks.")
+                self._sink_warned = True
+            return None
+
+        chosen_sink = None
+        if dev in ("auto", "hdmi"):
+            # Prefer sink with hdmi, vc4, bcm2835.*hdmi, displayport
+            for s in sinks:
+                sl = s.lower()
+                if any(k in sl for k in ("hdmi", "vc4", "displayport")) or ("bcm2835" in sl and "hdmi" in sl):
+                    chosen_sink = s
+                    break
+            if not chosen_sink and dev == "hdmi":
+                if not self._sink_warned:
+                    print("Warning: OUTPUT_DEVICE=hdmi requested but no HDMI sink found; keeping current sink.")
+                    self._sink_warned = True
+        elif dev in ("3.5mm", "analog", "headphones", "headphone"):
+            for s in sinks:
+                sl = s.lower()
+                if any(k in sl for k in ("analog", "headphones", "headphone")) or ("bcm2835" in sl and "analog" in sl):
+                    chosen_sink = s
+                    break
+        else:
+            # Explicit sink name
+            for s in sinks:
+                if s == self.output_device or s.lower() == dev:
+                    chosen_sink = s
+                    break
+
+        if chosen_sink:
+            self.current_sink = chosen_sink
+            try:
+                subprocess.run(["pactl", "set-default-sink", chosen_sink], stderr=subprocess.DEVNULL)
+                subprocess.run(["pactl", "set-sink-mute", chosen_sink, "0"], stderr=subprocess.DEVNULL)
+                subprocess.run(["pactl", "set-sink-volume", chosen_sink, f"{self.music_volume}%"], stderr=subprocess.DEVNULL)
+            except Exception as e:
+                print(f"Error configuring sink {chosen_sink}: {e}")
+            return chosen_sink
+
+        # Fallback to current default sink
+        sink_target = self.current_sink or "@DEFAULT_SINK@"
+        try:
+            subprocess.run(["pactl", "set-sink-mute", sink_target, "0"], stderr=subprocess.DEVNULL)
+            subprocess.run(["pactl", "set-sink-volume", sink_target, f"{self.music_volume}%"], stderr=subprocess.DEVNULL)
+        except Exception:
+            pass
+        return None
 
     def apply_settings(self):
         if not self.mic_enabled:
@@ -1290,8 +1371,9 @@ class MicrophoneChainManager:
     def set_music_volume(self, volume):
         self.music_volume = max(0, min(100, volume))
         if shutil.which("pactl"):
+            sink_target = self.current_sink or "@DEFAULT_SINK@"
             try:
-                subprocess.run(["pactl", "set-sink-volume", "@DEFAULT_SINK@", f"{self.music_volume}%"], stderr=subprocess.DEVNULL)
+                subprocess.run(["pactl", "set-sink-volume", sink_target, f"{self.music_volume}%"], stderr=subprocess.DEVNULL)
             except Exception:
                 pass
 
@@ -1302,11 +1384,7 @@ class MicrophoneChainManager:
 
     def set_output_device(self, device_name):
         self.output_device = device_name
-        if shutil.which("pactl") and device_name != "auto":
-            try:
-                subprocess.run(["pactl", "set-default-sink", device_name], stderr=subprocess.DEVNULL)
-            except Exception:
-                pass
+        self.select_output_sink(device_name)
 
     def stop_loopback(self):
         if self.loopback_module_id and shutil.which("pactl"):
@@ -2631,6 +2709,7 @@ class KaraokeApp(QWidget):
             except Exception:
                 ok = False
         if ok:
+            self.mic_manager.select_output_sink()
             self.mic_manager.apply_settings()
             self.mic_manager.set_music_volume(self.mic_manager.music_volume)
             self._audio_ready = True
@@ -3763,6 +3842,12 @@ class KaraokeApp(QWidget):
                 pass
 
     def rotate_background(self):
+        if len(self.backgrounds) == 1:
+            curr_path = self.backgrounds[0]
+            if self._is_video_file(curr_path) and (not self.bg_video_proc or self.bg_video_proc.poll() is not None):
+                self.update_background_image()
+            return
+
         if len(self.backgrounds) > 1:
             # If current item is a video and still playing, keep playing it unless multiple items exist
             curr_path = self.backgrounds[self.bg_index % len(self.backgrounds)]

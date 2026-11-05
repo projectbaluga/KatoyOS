@@ -18,6 +18,10 @@ cat >> "$CFG" <<CF
 # --- KatoyOS ---
 disable_splash=1
 disable_overscan=1
+# Force HDMI detection + audio for Smart TVs
+hdmi_force_hotplug=1
+hdmi_drive=2
+dtparam=audio=on
 CF
 
 # Quiet boot with the Plymouth splash

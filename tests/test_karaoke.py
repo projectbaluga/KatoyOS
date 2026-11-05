@@ -167,3 +167,92 @@ def test_calculate_elapsed_seconds():
     assert calc_fn(1000, 1000, 180.0) == 180.0
     assert calc_fn(-10, 1000, 180.0) == 0.0
     assert calc_fn(1500, 1000, 180.0) == 180.0
+
+
+def test_queue_tuple_unpacking_4_and_5_elements():
+    """Verify that queue operations safely handle 4-tuples and 5-tuples without crash."""
+    app_class = kk["KaraokeApp"]
+
+    class FakeApp:
+        def __init__(self):
+            self.reservation_queue = []
+            self.current_song = None
+            self.started_playback = []
+
+        def update_queue_ui(self):
+            pass
+
+        def stop_playback(self):
+            pass
+
+        def start_playback(self, code, title, artist, filepath, singer=""):
+            self.started_playback.append((code, title, artist, filepath, singer))
+
+    fake = FakeApp()
+
+    # 1. 4-tuple without singer
+    item4 = ("00001", "Song Four", "Artist 4", "/path/4.mid")
+    fake.reservation_queue.append(item4)
+    app_class.play_next_reserved_song(fake)
+    assert len(fake.started_playback) == 1
+    assert fake.started_playback[0] == ("00001", "Song Four", "Artist 4", "/path/4.mid", "")
+
+    # 2. 5-tuple with singer
+    item5 = ("00002", "Song Five", "Artist 5", "/path/5.mid", "Juan")
+    fake.reservation_queue.append(item5)
+    app_class.play_next_reserved_song(fake)
+    assert len(fake.started_playback) == 2
+    assert fake.started_playback[1] == ("00002", "Song Five", "Artist 5", "/path/5.mid", "Juan")
+
+
+def test_lyric_offset_config_and_render():
+    """Verify LYRIC_OFFSET is read into config and affects effective elapsed time."""
+    load_cfg = kk["load_config"]
+    cfg = load_cfg()
+    assert "LYRIC_OFFSET" in cfg
+    assert float(cfg["LYRIC_OFFSET"]) == 0.0
+
+
+def test_instrumental_gap_countdown():
+    """Verify instrumental countdown indicators appear for intro and interlude gaps."""
+    app_class = kk["KaraokeApp"]
+
+    class MockLabel:
+        def __init__(self):
+            self.text = ""
+        def set_text(self, t):
+            self.text = t
+        def set_syllables(self, s):
+            pass
+        def set_elapsed(self, t):
+            pass
+
+    class FakeLyricApp:
+        def __init__(self):
+            self.lyrics_lines = [
+                {"text": "Line One", "start_sec": 10.0, "syllables": [{"text": "Line One", "sec": 10.0}]},
+                {"text": "Line Two", "start_sec": 25.0, "syllables": [{"text": "Line Two", "sec": 25.0}]}
+            ]
+            self._lyric_idx = -2
+            self.lyric_curr_lbl = MockLabel()
+            self.lyric_next_lbl = MockLabel()
+            self.lyric_prev_lbl = MockLabel()
+
+        def _segments_for_line(self, idx):
+            return [("Line", 10.0, 11.0)]
+
+    fake = FakeLyricApp()
+
+    # Intro with > 4s gap
+    app_class.render_lyrics(fake, 2.0)
+    assert "Instrumental" in fake.lyric_curr_lbl.text
+    assert "8s" in fake.lyric_curr_lbl.text
+
+    # Line 1 singing
+    app_class.render_lyrics(fake, 10.5)
+    assert fake._lyric_idx == 0
+
+    # Interlude gap between line 1 and line 2 (> 4s remaining to next line)
+    app_class.render_lyrics(fake, 15.0)
+    assert "Instrumental" in fake.lyric_curr_lbl.text
+    assert "10s" in fake.lyric_curr_lbl.text

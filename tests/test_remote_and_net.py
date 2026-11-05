@@ -224,3 +224,92 @@ def test_hotspot_mode_behavior_and_watcher():
     w_fallback = NetworkWatcher(cfg_fallback)
     assert w_fallback.mode == "fallback"
     assert w_fallback.grace == 30.0
+
+
+def test_is_hotspot_active_detection_multi_criteria(monkeypatch):
+    """Verify is_hotspot_active checks systemd units, iw/iwconfig, and 10.0.0.0/24 subnet."""
+    is_hotspot_active = kk["is_hotspot_active"]
+
+    # 1. Systemd unit active
+    monkeypatch.setattr("subprocess.run", lambda args, **kwargs:
+        type("Res", (), {"returncode": 0 if "katoy-ap.service" in args else 1, "stdout": "", "stderr": ""})())
+    assert is_hotspot_active() is True
+
+    # 2. iw dev reporting type AP
+    def mock_iw(args, **kwargs):
+        if args == ["iw", "dev"]:
+            return type("Res", (), {"returncode": 0, "stdout": "Interface wlan0\n  type AP\n", "stderr": ""})()
+        return type("Res", (), {"returncode": 1, "stdout": "", "stderr": ""})()
+    monkeypatch.setattr("subprocess.run", mock_iw)
+    assert is_hotspot_active() is True
+
+    # 3. 10.0.0.0/24 interface IP assigned
+    def mock_ip(args, **kwargs):
+        if args == ["ip", "-o", "-4", "addr", "show"]:
+            return type("Res", (), {"returncode": 0, "stdout": "2: wlan0 inet 10.0.0.1/24 brd 10.0.0.255 scope global wlan0\n", "stderr": ""})()
+        return type("Res", (), {"returncode": 1, "stdout": "", "stderr": ""})()
+    monkeypatch.setattr("subprocess.run", mock_ip)
+    assert is_hotspot_active() is True
+
+    # 4. Nothing active
+    monkeypatch.setattr("subprocess.run", lambda args, **kwargs:
+        type("Res", (), {"returncode": 1, "stdout": "", "stderr": ""})())
+    assert is_hotspot_active() is False
+
+
+def test_settings_lyric_offset_update():
+    """Verify updating LYRIC_OFFSET via /settings is parsed, persisted, and live applied."""
+    RemoteRequestHandler = kk["RemoteRequestHandler"]
+
+    class MockApp:
+        def __init__(self):
+            self.config = {"LYRIC_OFFSET": "0.0"}
+            self.lyric_offset = 0.0
+            self.mic_manager = None
+            self.songs_dir = ""
+
+    handler = RemoteRequestHandler.__new__(RemoteRequestHandler)
+    handler.app_instance = MockApp()
+    sent_data = {}
+    handler.send_json = lambda d, c=200: sent_data.update(d)
+
+    handler._apply_settings_update({"LYRIC_OFFSET": ["0.5"]})
+    assert handler.app_instance.config["LYRIC_OFFSET"] == "0.5"
+    assert handler.app_instance.lyric_offset == 0.5
+    assert sent_data.get("status") == "ok"
+
+
+def test_expanded_captive_portal_probes():
+    """Verify newly added probe endpoints redirect to captive portal."""
+    RemoteRequestHandler = kk["RemoteRequestHandler"]
+
+    class MockApp:
+        def __init__(self):
+            self.net_ap = True
+            self.net_ip = "10.0.0.1"
+            self.config = {"REMOTE_PORT": "8080"}
+
+    class DummyHandler(RemoteRequestHandler):
+        def __init__(self, path):
+            self.path = path
+            self.headers = {}
+            self.client_address = ("10.0.0.55", 12345)
+            self.app_instance = MockApp()
+            self.pin = ""
+            self.responses = []
+            self.header_list = {}
+            self.do_GET()
+
+        def send_response(self, code):
+            self.responses.append(code)
+
+        def send_header(self, k, v):
+            self.header_list[k] = v
+
+        def end_headers(self):
+            pass
+
+    for probe in ("/canonical.html", "/check_network_status.txt", "/mobile/status.php", "/kindle-wifi/wifiredirect.html"):
+        h = DummyHandler(probe)
+        assert 302 in h.responses
+        assert h.header_list.get("Location") == "http://10.0.0.1:8080/"

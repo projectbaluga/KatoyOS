@@ -256,3 +256,82 @@ def test_instrumental_gap_countdown():
     app_class.render_lyrics(fake, 15.0)
     assert "Instrumental" in fake.lyric_curr_lbl.text
     assert "10s" in fake.lyric_curr_lbl.text
+
+
+def test_video_background_discovery_and_priority():
+    """Verify find_backgrounds discovers .mp4, .mkv, .webm and prioritizes videos over images."""
+    find_bg = kk["find_backgrounds"]
+    tmpdir = Path(tempfile.mkdtemp())
+    try:
+        vid_dir = tmpdir / "videos"
+        vid_dir.mkdir()
+        (vid_dir / "bg1.mp4").write_text("dummy")
+        (vid_dir / "bg2.webm").write_text("dummy")
+        (vid_dir / "still.jpg").write_text("dummy")
+
+        bgs = find_bg(str(vid_dir), None)
+        assert len(bgs) == 2
+        assert all(b.suffix.lower() in (".mp4", ".webm") for b in bgs)
+
+        # Single explicit video file
+        single_vid = vid_dir / "bg1.mp4"
+        assert find_bg(str(single_vid), None) == [single_vid]
+
+        # Directory with only images falls back to images
+        img_dir = tmpdir / "images"
+        img_dir.mkdir()
+        (img_dir / "img1.png").write_text("dummy")
+        (img_dir / "img2.jpg").write_text("dummy")
+        imgs = find_bg(str(img_dir), None)
+        assert len(imgs) == 2
+        assert all(b.suffix.lower() in (".png", ".jpg") for b in imgs)
+    finally:
+        shutil.rmtree(tmpdir)
+
+
+def test_video_background_lifecycle_helpers():
+    """Verify start_background_video and stop_background_video lifecycle tracking."""
+    app_class = kk["KaraokeApp"]
+
+    class FakeProc:
+        def __init__(self):
+            self.terminated = False
+            self.killed = False
+
+        def poll(self):
+            return None if not self.terminated else 0
+
+        def terminate(self):
+            self.terminated = True
+
+        def wait(self, timeout=None):
+            return 0
+
+        def kill(self):
+            self.killed = True
+
+    class FakePlayerApp:
+        def __init__(self):
+            self.is_playing = False
+            self.bg_video_proc = None
+            self._current_bg_video = None
+            self._mpv_warned = False
+            self.win_id = 12345
+
+        def winId(self):
+            return self.win_id
+
+    fake = FakePlayerApp()
+    proc = FakeProc()
+    fake.bg_video_proc = proc
+    fake._current_bg_video = Path("/test.mp4")
+
+    # Stop video
+    app_class.stop_background_video(fake)
+    assert proc.terminated is True
+    assert fake.bg_video_proc is None
+    assert fake._current_bg_video is None
+
+    # Idempotent stop
+    app_class.stop_background_video(fake)
+    assert fake.bg_video_proc is None

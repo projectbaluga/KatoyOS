@@ -1534,18 +1534,15 @@ def find_backgrounds(configured_path, usb_dir):
     - Explicit BACKGROUND= path in config (file or directory).
     - USB / KATOYDATA roots: backgrounds/, images/, wallpapers/, videos/.
     - Default wallpaper image as last resort.
-    - When both videos and images exist in a target folder, videos are prioritized.
-      If no videos exist, images are returned.
+    - Videos are listed first; still images remain available as a fallback
+      if mpv is unavailable or cannot open the selected video.
     """
     def filter_cand_dir(p):
         files = [f for f in p.iterdir() if f.is_file()]
         vids = sorted([f for f in files if f.suffix.lower() in VIDEO_EXTS])
-        if vids:
-            return vids
         imgs = sorted([f for f in files if f.suffix.lower() in IMAGE_EXTS])
-        if imgs:
-            return imgs
-        return []
+        # Keep still images available as a fallback if mpv cannot start.
+        return vids + imgs
 
     if configured_path:
         p = Path(configured_path)
@@ -3510,8 +3507,8 @@ class KaraokeApp(QWidget):
 
 
     def start_playback(self, code, title, artist, filepath, singer=""):
-        self.stop_playback()
-        self.stop_background_video()
+        # Stop the idle video without briefly restarting it during song changes.
+        self.stop_playback(resume_background=False)
 
         if not self.soundfont:
             self.toast.flash("No SoundFont (.sf2) found. Put one on your USB drive.", 6000)
@@ -3635,11 +3632,9 @@ class KaraokeApp(QWidget):
         else:
             self.stop_playback()
 
-    def stop_playback(self):
+    def stop_playback(self, resume_background=True):
         self.play_timer.stop()
         self.score_timer.stop()
-        self.bg_timer.start()
-        self.update_background_image()
 
         if self.persistent_synth:
             self.persistent_synth.stop()
@@ -3658,6 +3653,16 @@ class KaraokeApp(QWidget):
         self.is_playing = False
         self.is_paused = False
         self.current_song = None
+
+        # Refresh only after clearing playback state; otherwise the video
+        # launcher sees is_playing=True and refuses to start the idle video.
+        if resume_background:
+            self.bg_timer.start()
+            self.update_background_image()
+        else:
+            self.bg_timer.stop()
+            self.stop_background_video()
+
         self.hide_score()
         self.controls_timer.stop()
         if hasattr(self, "controls_card") and self.controls_card:
@@ -3784,23 +3789,27 @@ class KaraokeApp(QWidget):
         return bool(path and path.suffix.lower() in VIDEO_EXTS)
 
     def start_background_video(self, video_path):
+        """Start an idle-screen video embedded in this Qt window.
+
+        Returns True when the requested video is already running or was launched.
+        """
         if self.is_playing:
             self.stop_background_video()
-            return
+            return False
 
         if self.bg_video_proc and self.bg_video_proc.poll() is None:
             if self._current_bg_video == video_path:
-                return
+                return True
             self.stop_background_video()
 
         if not shutil.which("mpv"):
             if not self._mpv_warned:
                 print("Warning: mpv binary not found; falling back to image slideshow background.")
                 self._mpv_warned = True
-            return
+            return False
 
         if not video_path.exists():
-            return
+            return False
 
         wid = str(int(self.winId()))
         cmd = [
@@ -3819,12 +3828,14 @@ class KaraokeApp(QWidget):
         try:
             self.bg_video_proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             self._current_bg_video = video_path
+            return True
         except Exception as e:
             if not self._mpv_warned:
                 print(f"Warning: Failed to launch background video with mpv ({e}); falling back to images.")
                 self._mpv_warned = True
             self.bg_video_proc = None
             self._current_bg_video = None
+            return False
 
     def stop_background_video(self):
         proc = self.bg_video_proc
@@ -3868,7 +3879,14 @@ class KaraokeApp(QWidget):
         path = self.backgrounds[self.bg_index % len(self.backgrounds)]
         if self._is_video_file(path):
             if not self.is_playing:
-                self.start_background_video(path)
+                started = self.start_background_video(path)
+                if not started:
+                    # Never leave the idle background blank when video startup fails.
+                    fallback = next((p for p in self.backgrounds if p.suffix.lower() in IMAGE_EXTS and p.exists()), None)
+                    if fallback:
+                        pix = QPixmap(str(fallback))
+                        if not pix.isNull():
+                            self._cover_src = pix
             else:
                 self.stop_background_video()
         else:

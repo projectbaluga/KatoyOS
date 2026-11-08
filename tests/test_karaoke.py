@@ -270,8 +270,9 @@ def test_video_background_discovery_and_priority():
         (vid_dir / "still.jpg").write_text("dummy")
 
         bgs = find_bg(str(vid_dir), None)
-        assert len(bgs) == 2
-        assert all(b.suffix.lower() in (".mp4", ".webm") for b in bgs)
+        assert len(bgs) == 3
+        assert all(b.suffix.lower() in (".mp4", ".webm") for b in bgs[:2])
+        assert bgs[2].suffix.lower() == ".jpg"
 
         # Single explicit video file
         single_vid = vid_dir / "bg1.mp4"
@@ -335,6 +336,61 @@ def test_video_background_lifecycle_helpers():
     # Idempotent stop
     app_class.stop_background_video(fake)
     assert fake.bg_video_proc is None
+
+
+
+def test_stop_playback_refreshes_background_after_clearing_play_state():
+    app_class = kk["KaraokeApp"]
+    events = []
+    class Timer:
+        def __init__(self, name): self.name = name
+        def stop(self): events.append(self.name + "_stop")
+        def start(self): events.append(self.name + "_start")
+    class Synth:
+        def stop(self): events.append("synth_stop")
+    class FakeApp:
+        play_timer = Timer("play")
+        score_timer = Timer("score")
+        bg_timer = Timer("background")
+        persistent_synth = Synth()
+        fluid_proc = None
+        is_playing = True
+        is_paused = False
+        current_song = ("1", "Song", "Artist", "/song.mid", "")
+        controls_card = None
+        def hide_score(self): pass
+        def update_background_image(self): events.append(("background_refresh", self.is_playing))
+        def stop_background_video(self): events.append("video_stop")
+    fake = FakeApp()
+    app_class.stop_playback(fake)
+    assert fake.is_playing is False
+    assert ("background_refresh", False) in events
+    assert events.index(("background_refresh", False)) > events.index("synth_stop")
+
+
+def test_song_transition_does_not_restart_idle_background():
+    app_class = kk["KaraokeApp"]
+    events = []
+    class Timer:
+        def stop(self): events.append("timer_stop")
+        def start(self): events.append("timer_start")
+    class FakeApp:
+        play_timer = Timer()
+        score_timer = Timer()
+        bg_timer = Timer()
+        persistent_synth = None
+        fluid_proc = None
+        is_playing = False
+        is_paused = False
+        current_song = None
+        controls_card = None
+        def hide_score(self): pass
+        def stop_background_video(self): events.append("video_stop")
+        def update_background_image(self): events.append("background_refresh")
+    fake = FakeApp()
+    app_class.stop_playback(fake, resume_background=False)
+    assert "background_refresh" not in events
+    assert events.count("video_stop") == 1
 
 
 def test_auto_hdmi_sink_selection(monkeypatch):

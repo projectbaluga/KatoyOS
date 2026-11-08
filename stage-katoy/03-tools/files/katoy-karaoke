@@ -1627,7 +1627,7 @@ def extract_midi_vocal_gender(filepath, fallback="MALE"):
             if msg.type not in ("text", "lyrics", "track_name", "marker", "cue_marker"):
                 continue
             value = getattr(msg, "text", getattr(msg, "name", "")) or ""
-            match = re.match(r"^@(GENDER|SINGER|SEX|V)\\s*[:=]\\s*(FEMALE|MALE|F|M|WOMAN|MAN)\\s*$", value.strip(), re.I)
+            match = re.match(r"^@(GENDER|SINGER|SEX|V)\s*[:=]\s*(FEMALE|MALE|F|M|WOMAN|MAN)\s*$", value.strip(), re.I)
             if match:
                 token = match.group(2).upper()
                 return "FEMALE" if token in ("F", "FEMALE", "WOMAN") else "MALE"

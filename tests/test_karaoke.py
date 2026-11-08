@@ -117,6 +117,9 @@ def test_lyric_renderer_uses_rolling_two_line_window():
         def _fit_lyric_pair_font(self):
             pass
 
+        def _set_lyric_row(self, widget, idx, elapsed_sec, active=False, completed=False):
+            return app_class._set_lyric_row(self, widget, idx, elapsed_sec, active, completed)
+
     fake = FakeLyricApp()
 
     # First line is active on row 1; second line waits on row 2.
@@ -358,6 +361,9 @@ def test_instrumental_gap_countdown():
         def _segments_for_line(self, idx):
             return [("Line", 10.0, 11.0)]
 
+        def _set_lyric_row(self, widget, idx, elapsed_sec, active=False, completed=False):
+            return app_class._set_lyric_row(self, widget, idx, elapsed_sec, active, completed)
+
     fake = FakeLyricApp()
 
     # Intro with > 4s gap
@@ -466,7 +472,7 @@ def test_background_video_targets_player_surface_only(monkeypatch, tmp_path):
 
     class FakeStack:
         def currentWidget(self):
-            return self.player_page
+            return self.page
 
     class FakeSurface:
         def __init__(self):
@@ -497,6 +503,7 @@ def test_background_video_targets_player_surface_only(monkeypatch, tmp_path):
     monkeypatch.setattr("subprocess.Popen", fake_popen)
 
     fake = FakeApp()
+    fake.stack.page = fake.player_page
     assert app_class.start_background_video(fake, video) is True
     assert fake.bg_video_proc is not None
     assert fake._current_bg_video == video

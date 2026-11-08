@@ -1601,6 +1601,39 @@ def load_midifile_robust(filepath):
     return mido.MidiFile(filepath, clip=True)
 
 
+
+def extract_midi_vocal_gender(filepath, fallback="MALE"):
+    """Read an optional singer-gender hint from MIDI text metadata.
+
+    Supported tags: @GENDER=FEMALE/MALE, @SINGER=FEMALE/MALE,
+    @SEX=F/M, and @V=F/M. Untagged files use the configured fallback;
+    artist names are deliberately not guessed.
+    """
+    fallback = str(fallback or "MALE").strip().upper()
+    if fallback in ("F", "FEMALE", "WOMAN", "W"):
+        fallback = "FEMALE"
+    elif fallback in ("M", "MALE", "MAN"):
+        fallback = "MALE"
+    else:
+        fallback = "MALE"
+
+    try:
+        mid = load_midifile_robust(filepath)
+    except Exception:
+        return fallback
+
+    for track in mid.tracks:
+        for msg in track:
+            if msg.type not in ("text", "lyrics", "track_name", "marker", "cue_marker"):
+                continue
+            value = getattr(msg, "text", getattr(msg, "name", "")) or ""
+            match = re.match(r"^@(GENDER|SINGER|SEX|V)\\s*[:=]\\s*(FEMALE|MALE|F|M|WOMAN|MAN)\\s*$", value.strip(), re.I)
+            if match:
+                token = match.group(2).upper()
+                return "FEMALE" if token in ("F", "FEMALE", "WOMAN") else "MALE"
+    return fallback
+
+
 def calculate_elapsed_seconds(current_tick, total_ticks, song_duration):
     """Calculates elapsed audio position in seconds from FluidSynth ticks."""
     if total_ticks > 0 and current_tick >= 0:
@@ -2253,6 +2286,7 @@ class LyricLineWidget(QWidget):
         self._wipe = 0.0
         self._pix_base = None
         self._pix_sung = None
+        self._sung_color = QColor("#4f9dff")
         self._dirty = True
         h = S(px) * 1.55
         self.setFixedHeight(int(h))
@@ -2265,6 +2299,12 @@ class LyricLineWidget(QWidget):
     def set_syllables(self, segs):
         self._segs = list(segs)
         self._wipe = 0.0
+        self._dirty = True
+        self.update()
+
+    def set_sung_color(self, color):
+        """Set the singer-specific color used for the sung portion of this line."""
+        self._sung_color = QColor(color)
         self._dirty = True
         self.update()
 
@@ -2339,7 +2379,7 @@ class LyricLineWidget(QWidget):
 
         if self.mode == "current":
             self._pix_base = render(QBrush(QColor(255, 255, 255)))
-            self._pix_sung = render(QBrush(QColor(255, 235, 59)))
+            self._pix_sung = render(QBrush(self._sung_color))
         else:
             self._pix_base = render(QBrush(QColor(220, 225, 240, 200)))
 
@@ -3084,8 +3124,8 @@ class KaraokeApp(QWidget):
         lv.setContentsMargins(0, 0, 0, 0)
         lv.setSpacing(S(6))
         lv.setAlignment(Qt.AlignmentFlag.AlignVCenter)
-        self.lyric_curr_lbl = LyricLineWidget(78, "current")
-        self.lyric_next_lbl = LyricLineWidget(58, "dim")
+        self.lyric_curr_lbl = LyricLineWidget(84, "current")
+        self.lyric_next_lbl = LyricLineWidget(64, "dim")
         lv.addStretch(1)
         lv.addWidget(self.lyric_curr_lbl)
         lv.addSpacing(S(12))
@@ -3532,6 +3572,9 @@ class KaraokeApp(QWidget):
         self._lyric_idx = -2
 
         lines, duration, m_title, m_artist = extract_midi_lyrics_and_duration(filepath)
+        vocal_gender = extract_midi_vocal_gender(filepath, self.config.get("LYRIC_GENDER", "MALE"))
+        sung_color = "#ef647c" if vocal_gender == "FEMALE" else "#4f9dff"
+        self.lyric_curr_lbl.set_sung_color(sung_color)
         if self.tempo_multiplier > 0:
             duration = duration / self.tempo_multiplier
             for line in lines:

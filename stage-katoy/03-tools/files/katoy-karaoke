@@ -3642,17 +3642,19 @@ class KaraokeApp(QWidget):
         self.is_paused = False
         self.set_pause_button(False)
 
-        # Keep the current idle video alive behind the karaoke page. The
-        # background timer is paused during a song so a playlist does not
-        # unexpectedly switch scenes mid-performance.
+        # Idle screens stay on still images. Start the first configured video
+        # only after the player page is visible, and keep the scene fixed for
+        # the whole song.
         self.bg_timer.stop()
         self.play_timer.start()
 
         self.stack.setCurrentWidget(self.player_page)
-        # Wait until the native child surface is mapped before asking mpv to
-        # render into it. This is a child X11 window, not the app's top-level ID.
-        video_path = self.backgrounds[self.bg_index % len(self.backgrounds)] if self.backgrounds else None
-        if video_path and self._is_video_file(video_path):
+        video_path = next(
+            (p for p in self.backgrounds if self._is_video_file(p) and p.exists()),
+            None,
+        )
+        if video_path:
+            # Wait until the native child surface is mapped before launching mpv.
             QTimer.singleShot(180, lambda p=video_path: self.start_background_video(p))
 
     def toggle_play_pause(self):

@@ -366,6 +366,9 @@ def test_instrumental_gap_countdown():
         def _segments_for_line(self, idx):
             return [("Line", 10.0, 11.0)]
 
+        def _fit_lyric_pair_font(self):
+            pass
+
         def _set_lyric_row(self, widget, idx, elapsed_sec, active=False, completed=False):
             return app_class._set_lyric_row(self, widget, idx, elapsed_sec, active, completed)
 

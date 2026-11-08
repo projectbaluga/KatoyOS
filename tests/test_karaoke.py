@@ -362,8 +362,8 @@ def test_video_background_lifecycle_helpers():
 
 
 
-def test_background_video_is_kept_running_during_song(monkeypatch, tmp_path):
-    """The idle video remains alive while a song plays; mpv must attach, not spawn fullscreen."""
+def test_background_video_targets_player_surface_only(monkeypatch, tmp_path):
+    """mpv attaches to the dedicated player child surface, never the top-level app window."""
     app_class = kk["KaraokeApp"]
 
     class FakeProc:
@@ -371,22 +371,27 @@ def test_background_video_is_kept_running_during_song(monkeypatch, tmp_path):
             return None
 
     class FakeStack:
+        def currentWidget(self):
+            return self.player_page
+
+    class FakeSurface:
         def __init__(self):
-            self.native = False
-            self.raised = False
-        def setAttribute(self, attr, value):
-            self.native = value
-        def raise_(self):
-            self.raised = True
+            self.visible = False
+        def show(self):
+            self.visible = True
+        def hide(self):
+            self.visible = False
+        def winId(self):
+            return 67890
 
     class FakeApp:
         is_playing = True
         bg_video_proc = None
         _current_bg_video = None
         _mpv_warned = False
+        player_page = object()
         stack = FakeStack()
-        def winId(self):
-            return 12345
+        bg_video_surface = FakeSurface()
 
     video = tmp_path / "background.mp4"
     video.write_bytes(b"not-a-real-video")
@@ -401,11 +406,23 @@ def test_background_video_is_kept_running_during_song(monkeypatch, tmp_path):
     assert app_class.start_background_video(fake, video) is True
     assert fake.bg_video_proc is not None
     assert fake._current_bg_video == video
-    assert fake.stack.native is True
-    assert fake.stack.raised is True
-    assert f"--wid=12345" in commands[0]
+    assert fake.bg_video_surface.visible is True
+    assert "--wid=67890" in commands[0]
+    assert "--wid=12345" not in commands[0]
     assert "--force-window=no" in commands[0]
     assert "--fullscreen=no" in commands[0]
+
+
+def test_background_video_refuses_to_start_on_idle_page(tmp_path):
+    """Idle pages must never launch mpv."""
+    app_class = kk["KaraokeApp"]
+    class FakeStack:
+        def currentWidget(self): return object()
+    class FakeApp:
+        is_playing = False
+        stack = FakeStack()
+        bg_video_proc = None
+    assert app_class.start_background_video(FakeApp(), tmp_path / "idle.mp4") is False
 
 
 def test_stop_playback_refreshes_background_after_clearing_play_state():
@@ -440,6 +457,7 @@ def test_stop_playback_refreshes_background_after_clearing_play_state():
     app_class.stop_playback(fake)
     assert fake.is_playing is False
     assert ("background_refresh", False) in events
+    assert events.index("video_stop") < events.index(("background_refresh", False))
     assert events.index(("background_refresh", False)) > events.index("synth_stop")
 
 
@@ -471,8 +489,8 @@ def test_song_transition_does_not_restart_idle_background():
     fake = FakeApp()
     app_class.stop_playback(fake, resume_background=False)
     assert "background_refresh" not in events
-    # Transitioning to the next song must not tear down the shared video layer.
-    assert events.count("video_stop") == 0
+    # Stop the previous song's video before the next song starts its own.
+    assert events.count("video_stop") == 1
 
 
 def test_auto_hdmi_sink_selection(monkeypatch):

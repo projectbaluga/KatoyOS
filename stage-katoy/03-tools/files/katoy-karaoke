@@ -3516,9 +3516,12 @@ class KaraokeApp(QWidget):
             self.toast.flash(f"Song file missing: {fp.name}", 5000)
             return
 
-        # Validate the request before stopping the current song/background.
-        # Then stop the idle video without briefly restarting it.
+        # Validate the request before changing the current playback state.
+        # Preserve an existing background video, or start the selected one now
+        # if playback was triggered before the idle background had initialized.
         self.stop_playback(resume_background=False)
+        if self.backgrounds and not (self.bg_video_proc and self.bg_video_proc.poll() is None):
+            self.update_background_image()
 
         self.current_song = (code, title, artist, filepath, singer)
         self.p_code_lbl.setText(code)

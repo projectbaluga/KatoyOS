@@ -117,6 +117,9 @@ def test_lyric_renderer_uses_rolling_two_line_window():
         def _fit_lyric_pair_font(self):
             pass
 
+        def _lyric_rollover_time(self, idx):
+            return app_class._lyric_rollover_time(self, idx)
+
         def _set_lyric_row(self, widget, idx, elapsed_sec, active=False, completed=False):
             return app_class._set_lyric_row(self, widget, idx, elapsed_sec, active, completed)
 
@@ -346,6 +349,8 @@ def test_instrumental_gap_countdown():
             pass
         def set_elapsed(self, t):
             pass
+        def set_mode(self, mode):
+            self.mode = mode
 
     class FakeLyricApp:
         def __init__(self):

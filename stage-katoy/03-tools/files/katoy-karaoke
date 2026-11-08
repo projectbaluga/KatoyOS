@@ -3926,12 +3926,16 @@ class KaraokeApp(QWidget):
             top_idx, bottom_idx, active_slot = 0, (1 if n > 1 else None), None
         elif curr_idx == 0:
             top_idx, bottom_idx, active_slot = 0, (1 if n > 1 else None), "top"
+        elif curr_idx % 2 == 0:
+            # Odd-numbered song lines (index 0, 2, 4...) are sung on the upper row.
+            top_idx, bottom_idx, active_slot = curr_idx, (curr_idx + 1 if curr_idx + 1 < n else None), "top"
         elif elapsed_sec < self._lyric_rollover_time(curr_idx):
-            # Keep the completed previous line above the line currently being sung.
+            # Even-numbered song lines stay on the lower row; keep the previous
+            # completed line above until the lower line is nearly finished.
             top_idx, bottom_idx, active_slot = curr_idx - 1, curr_idx, "bottom"
         else:
-            # Near the end of the current lower line, preview the following line
-            # in the upper row without interrupting the current line's highlighting.
+            # Near the end of a lower-row line, preview the following line above
+            # while the current lower-row line keeps its highlighting.
             top_idx, bottom_idx, active_slot = (curr_idx + 1 if curr_idx + 1 < n else None), curr_idx, "bottom"
 
         layout = (top_idx, bottom_idx, active_slot)

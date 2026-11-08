@@ -339,6 +339,52 @@ def test_video_background_lifecycle_helpers():
 
 
 
+def test_background_video_is_kept_running_during_song(monkeypatch, tmp_path):
+    """The idle video remains alive while a song plays; mpv must attach, not spawn fullscreen."""
+    app_class = kk["KaraokeApp"]
+
+    class FakeProc:
+        def poll(self):
+            return None
+
+    class FakeStack:
+        def __init__(self):
+            self.native = False
+            self.raised = False
+        def setAttribute(self, attr, value):
+            self.native = value
+        def raise_(self):
+            self.raised = True
+
+    class FakeApp:
+        is_playing = True
+        bg_video_proc = None
+        _current_bg_video = None
+        _mpv_warned = False
+        stack = FakeStack()
+        def winId(self):
+            return 12345
+
+    video = tmp_path / "background.mp4"
+    video.write_bytes(b"not-a-real-video")
+    commands = []
+    monkeypatch.setattr("shutil.which", lambda name: "/usr/bin/mpv" if name == "mpv" else None)
+    def fake_popen(cmd, **kwargs):
+        commands.append(cmd)
+        return FakeProc()
+    monkeypatch.setattr("subprocess.Popen", fake_popen)
+
+    fake = FakeApp()
+    assert app_class.start_background_video(fake, video) is True
+    assert fake.bg_video_proc is not None
+    assert fake._current_bg_video == video
+    assert fake.stack.native is True
+    assert fake.stack.raised is True
+    assert f"--wid=12345" in commands[0]
+    assert "--force-window=no" in commands[0]
+    assert "--fullscreen=no" in commands[0]
+
+
 def test_stop_playback_refreshes_background_after_clearing_play_state():
     app_class = kk["KaraokeApp"]
     events = []
@@ -402,7 +448,8 @@ def test_song_transition_does_not_restart_idle_background():
     fake = FakeApp()
     app_class.stop_playback(fake, resume_background=False)
     assert "background_refresh" not in events
-    assert events.count("video_stop") == 1
+    # Transitioning to the next song must not tear down the shared video layer.
+    assert events.count("video_stop") == 0
 
 
 def test_auto_hdmi_sink_selection(monkeypatch):

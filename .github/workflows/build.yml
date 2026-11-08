@@ -16,6 +16,42 @@ on:
         type: string
         required: false
         default: ''
+      background_color:
+        description: 'Splash background color (#RRGGBB)'
+        type: string
+        default: '#030616'
+      logo_width:
+        description: 'Maximum logo width in pixels'
+        type: number
+        default: 700
+      logo_y_offset:
+        description: 'Logo vertical offset in pixels'
+        type: number
+        default: 32
+      name_font_size:
+        description: 'KatoyOS name font size in pixels'
+        type: number
+        default: 72
+      tagline_font_size:
+        description: 'Tagline font size in pixels'
+        type: number
+        default: 32
+      name_color:
+        description: 'KatoyOS name text color (#RRGGBB)'
+        type: string
+        default: '#FFFFFF'
+      tagline_color:
+        description: 'Tagline text color (#RRGGBB)'
+        type: string
+        default: '#DCE1F0'
+      regular_font:
+        description: 'Regular font file name or path available in runner'
+        type: string
+        default: 'DejaVuSans.ttf'
+      bold_font:
+        description: 'Bold font file name or path available in runner'
+        type: string
+        default: 'DejaVuSans-Bold.ttf'
   push:
     tags:
       - 'v*'
@@ -51,6 +87,15 @@ jobs:
             $LOGO_ARG \
             --name "${{ inputs.os_name }}" \
             --tagline "${{ inputs.tagline }}" \
+            --background "${{ inputs.background_color }}" \
+            --logo-width "${{ inputs.logo_width }}" \
+            --logo-y-offset "${{ inputs.logo_y_offset }}" \
+            --name-font-size "${{ inputs.name_font_size }}" \
+            --tagline-font-size "${{ inputs.tagline_font_size }}" \
+            --name-color "${{ inputs.name_color }}" \
+            --tagline-color "${{ inputs.tagline_color }}" \
+            --regular-font "${{ inputs.regular_font }}" \
+            --bold-font "${{ inputs.bold_font }}" \
             --out stage-katoy/01-branding/files/plymouth-splash.png
           if [ -n "$TMP_LOGO" ] && [ -f "$TMP_LOGO" ]; then
             rm -f "$TMP_LOGO"

@@ -75,19 +75,25 @@ def test_lyrics_prefer_lyric_events_and_split_attached_line_markers(tmp_path):
     assert lines[1]["start_sec"] == 1.0
 
 
-def test_lyric_renderer_advances_to_second_line():
+def test_lyric_renderer_uses_rolling_two_line_window():
     app_class = kk["KaraokeApp"]
 
     class MockLabel:
         def __init__(self):
             self.text = ""
             self.syllables = []
+            self.mode = "dim"
+            self.elapsed = None
         def set_text(self, value):
             self.text = value
+            self.syllables = [(value, 0.0, 0.0)] if value else []
         def set_syllables(self, value):
             self.syllables = value
+            self.text = "".join(part[0] for part in value)
         def set_elapsed(self, value):
-            pass
+            self.elapsed = value
+        def set_mode(self, value):
+            self.mode = value
 
     class FakeLyricApp:
         def __init__(self):
@@ -96,20 +102,49 @@ def test_lyric_renderer_advances_to_second_line():
                  "syllables": [{"text": "First line", "sec": 0.0}]},
                 {"text": "Second line", "start_sec": 5.0,
                  "syllables": [{"text": "Second line", "sec": 5.0}]},
+                {"text": "Third line", "start_sec": 10.0,
+                 "syllables": [{"text": "Third line", "sec": 10.0}]},
             ]
             self._lyric_idx = -2
+            self._lyric_layout = None
             self.lyric_curr_lbl = MockLabel()
             self.lyric_next_lbl = MockLabel()
-            self.lyric_prev_lbl = MockLabel()
+
+        def _segments_for_line(self, idx):
+            line = self.lyrics_lines[idx]
+            return [(line["text"], line["start_sec"], line["start_sec"] + 1.0)]
 
     fake = FakeLyricApp()
-    app_class.render_lyrics(fake, 0.2)
-    assert fake._lyric_idx == 0
-    assert fake.lyric_curr_lbl.syllables[0][0] == "First line"
 
+    # First line is active on row 1; second line waits on row 2.
+    app_class.render_lyrics(fake, 0.2)
+    assert fake.lyric_curr_lbl.text == "First line"
+    assert fake.lyric_curr_lbl.mode == "current"
+    assert fake.lyric_next_lbl.text == "Second line"
+    assert fake.lyric_next_lbl.mode == "dim"
+
+    # Once line 1 has finished, it stays above while line 2 is sung below.
     app_class.render_lyrics(fake, 5.2)
-    assert fake._lyric_idx == 1
-    assert fake.lyric_curr_lbl.syllables[0][0] == "Second line"
+    assert fake.lyric_curr_lbl.text == "First line"
+    assert fake.lyric_curr_lbl.mode == "current"
+    assert fake.lyric_curr_lbl.elapsed > 1000
+    assert fake.lyric_next_lbl.text == "Second line"
+    assert fake.lyric_next_lbl.mode == "current"
+    assert fake.lyric_next_lbl.elapsed == 5.2
+
+    # Near the end of line 2, line 3 appears on row 1 while line 2 keeps its wipe.
+    app_class.render_lyrics(fake, 5.9)
+    assert fake.lyric_curr_lbl.text == "Third line"
+    assert fake.lyric_curr_lbl.mode == "dim"
+    assert fake.lyric_next_lbl.text == "Second line"
+    assert fake.lyric_next_lbl.mode == "current"
+    assert fake.lyric_next_lbl.elapsed == 5.9
+
+    # When line 3 starts, it becomes active on row 1.
+    app_class.render_lyrics(fake, 10.2)
+    assert fake.lyric_curr_lbl.text == "Third line"
+    assert fake.lyric_curr_lbl.mode == "current"
+    assert fake.lyric_next_lbl.text == ""
 
 
 def test_midi_vocal_gender_metadata_and_fallback():

@@ -2333,6 +2333,15 @@ class LyricLineWidget(QWidget):
         self._dirty = True
         self.update()
 
+    def set_shared_font_px(self, px):
+        """Use one common rendered font size for both visible lyric rows."""
+        px = max(14, int(px))
+        if getattr(self, "_shared_font_px", None) == px:
+            return
+        self._shared_font_px = px
+        self._dirty = True
+        self.update()
+
     def set_sung_color(self, color):
         """Set the singer-specific color used for the sung portion of this line."""
         self._sung_color = QColor(color)
@@ -2375,7 +2384,7 @@ class LyricLineWidget(QWidget):
         if not self._segs or w < 20:
             return
         full = "".join(t for t, _, _ in self._segs)
-        px = S(self.base_px)
+        px = min(S(self.base_px), getattr(self, "_shared_font_px", S(self.base_px)))
         min_px = max(14, int(px * 0.25))
         avail = w - S(60)
         while True:
@@ -3630,6 +3639,7 @@ class KaraokeApp(QWidget):
         vocal_gender = extract_midi_vocal_gender(filepath, self.config.get("LYRIC_GENDER", "MALE"))
         sung_color = "#ef647c" if vocal_gender == "FEMALE" else "#4f9dff"
         self.lyric_curr_lbl.set_sung_color(sung_color)
+        self.lyric_next_lbl.set_sung_color(sung_color)
         if self.tempo_multiplier > 0:
             duration = duration / self.tempo_multiplier
             for line in lines:
@@ -3870,6 +3880,23 @@ class KaraokeApp(QWidget):
             widget.set_mode("dim")
             widget.set_text(self.lyrics_lines[idx]['text'])
 
+    def _fit_lyric_pair_font(self):
+        """Choose one font size that fits both visible rows, keeping them identical."""
+        widgets = (self.lyric_curr_lbl, self.lyric_next_lbl)
+        texts = ["".join(part[0] for part in widget._segs) for widget in widgets]
+        available = max(20, min(widget.width() for widget in widgets) - S(60))
+        px = S(84)
+        min_px = max(14, int(px * 0.25))
+        while px > min_px:
+            font = ui_font(1, QFont.Weight.ExtraBold)
+            font.setPixelSize(px)
+            metrics = QFontMetricsF(font)
+            if all(metrics.horizontalAdvance(value) <= available for value in texts):
+                break
+            px -= 2
+        for widget in widgets:
+            widget.set_shared_font_px(px)
+
     def render_lyrics(self, elapsed_sec):
         """Render a rolling two-line window without advancing both rows together.
 
@@ -3919,6 +3946,7 @@ class KaraokeApp(QWidget):
                 self.lyric_next_lbl, bottom_idx, elapsed_sec,
                 active=(active_slot == "bottom"),
             )
+            self._fit_lyric_pair_font()
 
         # Update the active wipe every playback tick; completed top rows remain fully sung.
         if active_slot == "top" and top_idx is not None:

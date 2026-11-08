@@ -3089,6 +3089,7 @@ class KaraokeApp(QWidget):
         self.bg_video_surface.setObjectName("playerVideoSurface")
         self.bg_video_surface.setAttribute(Qt.WidgetAttribute.WA_NativeWindow, True)
         self.bg_video_surface.setStyleSheet("background: transparent;")
+        self.bg_video_surface.hide()
         page_layers.addWidget(self.bg_video_surface)
 
         content = QWidget(w)
@@ -3881,8 +3882,9 @@ class KaraokeApp(QWidget):
 
         # Embed mpv into the dedicated native video child surface on the
         # player page. Never target self.winId(): that is the top-level window.
-        if not hasattr(self, "bg_video_surface") or not self.bg_video_surface.isVisible():
+        if not hasattr(self, "bg_video_surface"):
             return False
+        self.bg_video_surface.show()
         wid = str(int(self.bg_video_surface.winId()))
         cmd = [
             "mpv",
@@ -3918,6 +3920,8 @@ class KaraokeApp(QWidget):
                 self._mpv_warned = True
             self.bg_video_proc = None
             self._current_bg_video = None
+            if hasattr(self, "bg_video_surface"):
+                self.bg_video_surface.hide()
             return False
 
     def _verify_background_video(self, proc, video_path):
@@ -3927,6 +3931,8 @@ class KaraokeApp(QWidget):
 
         self.bg_video_proc = None
         self._current_bg_video = None
+        if hasattr(self, "bg_video_surface"):
+            self.bg_video_surface.hide()
         if not self._mpv_warned:
             print(f"Warning: mpv exited while opening {video_path}; using a still background if available.")
             self._mpv_warned = True
@@ -3946,6 +3952,8 @@ class KaraokeApp(QWidget):
         proc = self.bg_video_proc
         self.bg_video_proc = None
         self._current_bg_video = None
+        if hasattr(self, "bg_video_surface"):
+            self.bg_video_surface.hide()
         if proc and proc.poll() is None:
             try:
                 proc.terminate()

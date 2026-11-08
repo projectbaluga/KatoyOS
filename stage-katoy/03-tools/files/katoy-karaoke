@@ -3914,6 +3914,37 @@ class KaraokeApp(QWidget):
                 self.lyric_next_lbl.set_text("")
             return
 
+        # Show a countdown during long vocal-free gaps, both before the
+        # first lyric and between lyric lines. Do this before calculating the
+        # rolling lyric rows so a stale lyric cannot remain on screen.
+        next_idx = next(
+            (i for i, line in enumerate(self.lyrics_lines)
+             if elapsed_sec < line['start_sec']),
+            None,
+        )
+        if next_idx is not None:
+            next_start = self.lyrics_lines[next_idx]['start_sec']
+            if next_idx == 0:
+                gap_start = 0.0
+            else:
+                previous = self.lyrics_lines[next_idx - 1]
+                syllables = previous.get('syllables', [])
+                gap_start = (
+                    syllables[-1]['sec'] + 1.0
+                    if syllables else previous['start_sec'] + 2.0
+                )
+            remaining = next_start - elapsed_sec
+            if elapsed_sec >= gap_start and remaining > 4.0:
+                self._lyric_layout = None
+                self.lyric_curr_lbl.set_mode("dim")
+                self.lyric_curr_lbl.set_text(
+                    f"♪   Instrumental   ({int(remaining + 0.5)}s)   ♪"
+                )
+                self.lyric_next_lbl.set_mode("dim")
+                self.lyric_next_lbl.set_text("")
+                self._lyric_idx = -4
+                return
+
         curr_idx = -1
         for idx, line in enumerate(self.lyrics_lines):
             if elapsed_sec >= line['start_sec']:

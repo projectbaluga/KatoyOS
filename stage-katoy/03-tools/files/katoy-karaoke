@@ -1734,7 +1734,7 @@ def extract_midi_lyrics_and_duration(filepath):
             abs_tick += msg.time
             if msg.type not in ('lyrics', 'text'):
                 continue
-            txt = (msg.text or "").replace("\\x00", "").strip()
+            txt = (msg.text or "").replace("\x00", "").strip()
             if not txt:
                 continue
             if txt.startswith('@T'):
@@ -1781,7 +1781,7 @@ def extract_midi_lyrics_and_duration(filepath):
     for sec, txt in raw_syllables:
         chunk = []
         for char in txt:
-            if char in ('/', "\\\\", "\\r", "\\n"):
+            if char in ('/', "\\", "\r", "\n"):
                 if chunk:
                     part = "".join(chunk)
                     if part.strip():

@@ -36,7 +36,7 @@ from PyQt6.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit,
     QPushButton, QTableWidget, QTableWidgetItem, QHeaderView, QStackedWidget,
     QProgressBar, QMessageBox, QFrame, QListWidget, QListWidgetItem, QStyledItemDelegate, QStyle,
-    QSlider, QSizePolicy, QAbstractItemView, QButtonGroup
+    QSlider, QSizePolicy, QAbstractItemView, QButtonGroup, QStackedLayout
 )
 
 
@@ -3077,8 +3077,27 @@ class KaraokeApp(QWidget):
 
     # -- player page ----------------------------------------------------------------
     def create_player_page(self):
+        # Keep the video surface as a native child of the player page. The
+        # content widget is stacked above it so mpv never creates a top-level
+        # window and the lyrics/controls remain normal Qt widgets.
         w = QWidget()
-        lay = QVBoxLayout(w)
+        page_layers = QStackedLayout(w)
+        page_layers.setContentsMargins(0, 0, 0, 0)
+        page_layers.setStackingMode(QStackedLayout.StackingMode.StackAll)
+
+        self.bg_video_surface = QWidget(w)
+        self.bg_video_surface.setObjectName("playerVideoSurface")
+        self.bg_video_surface.setAttribute(Qt.WidgetAttribute.WA_NativeWindow, True)
+        self.bg_video_surface.setStyleSheet("background: transparent;")
+        page_layers.addWidget(self.bg_video_surface)
+
+        content = QWidget(w)
+        content.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        content.setStyleSheet("background: transparent;")
+        page_layers.addWidget(content)
+        page_layers.setCurrentWidget(content)
+
+        lay = QVBoxLayout(content)
         lay.setContentsMargins(S(56), S(36), S(56), S(30))
         lay.setSpacing(S(14))
 
@@ -3556,11 +3575,12 @@ class KaraokeApp(QWidget):
             self.toast.flash(f"Song file missing: {fp.name}", 5000)
             return
 
-        # Validate the request before changing the current playback state.
-        # Preserve an existing background video, or start the selected one now
-        # if playback was triggered before the idle background had initialized.
+        # Video backgrounds are only used on the singing screen. Idle screens
+        # always use still images; stop any stale mpv process before starting.
         self.stop_playback(resume_background=False)
-        if self.backgrounds and not (self.bg_video_proc and self.bg_video_proc.poll() is None):
+        if self.bg_video_proc:
+            self.stop_background_video()
+        if self.backgrounds:
             self.update_background_image()
 
         self.current_song = (code, title, artist, filepath, singer)
@@ -3628,8 +3648,11 @@ class KaraokeApp(QWidget):
         self.play_timer.start()
 
         self.stack.setCurrentWidget(self.player_page)
-        if self.bg_video_proc and self.bg_video_proc.poll() is None:
-            self.stack.raise_()
+        # Wait until the native child surface is mapped before asking mpv to
+        # render into it. This is a child X11 window, not the app's top-level ID.
+        video_path = self.backgrounds[self.bg_index % len(self.backgrounds)] if self.backgrounds else None
+        if video_path and self._is_video_file(video_path):
+            QTimer.singleShot(180, lambda p=video_path: self.start_background_video(p))
 
     def toggle_play_pause(self):
         if not self.is_playing:
@@ -3705,16 +3728,12 @@ class KaraokeApp(QWidget):
         self.is_paused = False
         self.current_song = None
 
-        # Refresh only after clearing playback state; otherwise the video
-        # launcher sees is_playing=True and refuses to start the idle video.
+        # Never leave the song video running on an idle/library screen.
+        self.stop_background_video()
         if resume_background:
             self.bg_timer.start()
-            # If the same video stayed alive during playback, this is a no-op.
-            # If it exited, update_background_image() safely starts it again.
             self.update_background_image()
         else:
-            # A false value means another song is taking over; keep the
-            # background process alive and simply pause idle rotation.
             self.bg_timer.stop()
 
         self.hide_score()
@@ -3843,12 +3862,9 @@ class KaraokeApp(QWidget):
         return bool(path and path.suffix.lower() in VIDEO_EXTS)
 
     def start_background_video(self, video_path):
-        """Start an idle-screen video embedded in this Qt window.
-
-        Returns True when the requested video is already running or was launched.
-        """
-        # The background is shared by the idle and singing screens. Do not
-        # stop it just because a song is playing.
+        """Play a background video inside the player page while a song is active."""
+        if not self.is_playing or self.stack.currentWidget() is not self.player_page:
+            return False
         if self.bg_video_proc and self.bg_video_proc.poll() is None:
             if self._current_bg_video == video_path:
                 return True
@@ -3863,10 +3879,11 @@ class KaraokeApp(QWidget):
         if not video_path.exists():
             return False
 
-        # Attach mpv to the existing KaraOkePi X11 window. In particular,
-        # --force-window=no prevents mpv from opening its own fullscreen window
-        # if the supplied parent window cannot be used.
-        wid = str(int(self.winId()))
+        # Embed mpv into the dedicated native video child surface on the
+        # player page. Never target self.winId(): that is the top-level window.
+        if not hasattr(self, "bg_video_surface") or not self.bg_video_surface.isVisible():
+            return False
+        wid = str(int(self.bg_video_surface.winId()))
         cmd = [
             "mpv",
             "--no-config",
@@ -3891,18 +3908,9 @@ class KaraokeApp(QWidget):
             )
             self.bg_video_proc = proc
             self._current_bg_video = video_path
-            # Keep the Qt page stack above mpv's native X11 child window so
-            # lyrics, song details and controls remain interactive/visible.
-            if hasattr(self, "stack"):
-                self.stack.setAttribute(Qt.WidgetAttribute.WA_NativeWindow, True)
-                self.stack.raise_()
-                # mpv creates/maps its child window asynchronously; raise the
-                # Qt overlay once more after that child exists.
-                if isinstance(self, QWidget):
-                    QTimer.singleShot(250, self.stack.raise_)
-                    QTimer.singleShot(
-                        1200, lambda p=proc, v=video_path: self._verify_background_video(p, v)
-                    )
+            QTimer.singleShot(
+                1200, lambda p=proc, v=video_path: self._verify_background_video(p, v)
+            )
             return True
         except Exception as e:
             if not self._mpv_warned:
@@ -3957,11 +3965,6 @@ class KaraokeApp(QWidget):
             return
 
         if len(self.backgrounds) > 1:
-            # If current item is a video and still playing, keep playing it unless multiple items exist
-            curr_path = self.backgrounds[self.bg_index % len(self.backgrounds)]
-            if self._is_video_file(curr_path) and self.bg_video_proc and self.bg_video_proc.poll() is None:
-                # Keep playing looping video rather than restarting every interval
-                return
             self.bg_index = (self.bg_index + 1) % len(self.backgrounds)
             self.update_background_image()
 
@@ -3975,14 +3978,13 @@ class KaraokeApp(QWidget):
 
         path = self.backgrounds[self.bg_index % len(self.backgrounds)]
         if self._is_video_file(path):
-            started = self.start_background_video(path)
-            if not started:
-                # Never leave the background blank when video startup fails.
-                fallback = next((p for p in self.backgrounds if p.suffix.lower() in IMAGE_EXTS and p.exists()), None)
-                if fallback:
-                    pix = QPixmap(str(fallback))
-                    if not pix.isNull():
-                        self._cover_src = pix
+            # Idle/library/settings pages are deliberately still-image only.
+            # The selected video is started later, after the player page opens.
+            fallback = next((p for p in self.backgrounds if p.suffix.lower() in IMAGE_EXTS and p.exists()), None)
+            if fallback:
+                pix = QPixmap(str(fallback))
+                if not pix.isNull():
+                    self._cover_src = pix
         else:
             self.stop_background_video()
             if path.exists():

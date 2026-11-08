@@ -1734,7 +1734,7 @@ def extract_midi_lyrics_and_duration(filepath):
             abs_tick += msg.time
             if msg.type not in ('lyrics', 'text'):
                 continue
-            txt = (msg.text or "").strip("\\x00")
+            txt = (msg.text or "").replace("\\x00", "").strip()
             if not txt:
                 continue
             if txt.startswith('@T'):
@@ -1778,15 +1778,20 @@ def extract_midi_lyrics_and_duration(filepath):
     # line breaks. A marker may be a separate event OR attached to either
     # end of a lyric event; handle both forms so lines don't collapse into
     # one long first line.
-    import re
     for sec, txt in raw_syllables:
-        parts = re.split(r'([/\\\\\\r\\n]+)', txt)
-        for part in parts:
-            if not part:
-                continue
-            if all(ch in '/\\\\\\r\\n' for ch in part):
+        chunk = []
+        for char in txt:
+            if char in ('/', "\\\\", "\\r", "\\n"):
+                if chunk:
+                    part = "".join(chunk)
+                    if part.strip():
+                        cur_syls.append({'sec': sec, 'text': part})
+                    chunk = []
                 flush_line()
-                continue
+            else:
+                chunk.append(char)
+        if chunk:
+            part = "".join(chunk)
             if part.strip():
                 cur_syls.append({'sec': sec, 'text': part})
 

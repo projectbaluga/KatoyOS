@@ -51,12 +51,18 @@ def main():
         sys.exit(1)
 
     DEST_DIR.mkdir(parents=True, exist_ok=True)
-    brand_raw = Image.open(BRAND_PATH)
+    brand_raw = Image.open(BRAND_PATH).convert("RGBA")
     gray = brand_raw.convert("L")
     w, h = gray.size
 
-    # Alpha mask from luminance: dark lines become opaque
-    alpha = gray.point(lum_to_alpha)
+    # Prefer the source PNG's alpha channel when it contains transparency.
+    # This supports transparent line-art PNGs (including the official oyster mark).
+    # For legacy opaque white-background artwork, derive alpha from luminance.
+    source_alpha = brand_raw.getchannel("A")
+    if source_alpha.getextrema()[0] < 255:
+        alpha = source_alpha
+    else:
+        alpha = gray.point(lum_to_alpha)
 
     # 1. Wallpaper: 1920x1080 solid KatoyOS navy (3, 6, 22)
     # Recolor logo lines to white and center logo at ~60% screen height

@@ -21,6 +21,17 @@ NAVY_BG = (3, 6, 22)
 CANVAS_SIZE = 1024
 
 
+def parse_color(value):
+    """Parse a #RRGGBB color."""
+    value = value.strip().lstrip("#")
+    if len(value) != 6:
+        raise argparse.ArgumentTypeError("Color must be #RRGGBB")
+    try:
+        return tuple(int(value[i:i + 2], 16) for i in (0, 2, 4))
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("Color must be #RRGGBB") from exc
+
+
 def lum_to_alpha(p):
     """
     Converts white background to transparent using luminance.
@@ -135,8 +146,8 @@ def extract_logo(logo_path):
     return cropped_logo
 
 
-def make_splash(logo_path, os_name, tagline, out_path):
-    canvas = Image.new("RGBA", (CANVAS_SIZE, CANVAS_SIZE), (*NAVY_BG, 255))
+def make_splash(logo_path, os_name, tagline, out_path, background, logo_width, logo_y_offset, name_font_size, tagline_font_size, name_color, tagline_color, regular_font, bold_font):
+    canvas = Image.new("RGBA", (CANVAS_SIZE, CANVAS_SIZE), (*background, 255))
 
     # Upper ~65% region for logo: y from 0 to 665
     upper_h = int(CANVAS_SIZE * 0.65)
@@ -144,7 +155,7 @@ def make_splash(logo_path, os_name, tagline, out_path):
     lw, lh = logo_img.size
 
     # Scale logo to fit comfortably in upper 65% (max w ~ 700, max h ~ 520)
-    max_logo_w = 700
+    max_logo_w = max(100, min(950, int(logo_width)))
     max_logo_h = int(upper_h * 0.82)  # ~545px
     scale = min(max_logo_w / lw, max_logo_h / lh, 1.0)
     # If original logo was small, allow scaling up proportionally
@@ -157,17 +168,19 @@ def make_splash(logo_path, os_name, tagline, out_path):
 
     # Center logo in upper ~65%
     logo_x = (CANVAS_SIZE - target_lw) // 2
-    logo_y = (upper_h - target_lh) // 2 + int(upper_h * 0.05)
+    logo_y = (upper_h - target_lh) // 2 + int(logo_y_offset)
     canvas.alpha_composite(scaled_logo, (logo_x, logo_y))
 
     draw = ImageDraw.Draw(canvas)
 
     # Text area: from upper_h downwards
     bold_font_candidates = [
+        bold_font,
         "DejaVuSans-Bold.ttf",
         "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
     ]
     reg_font_candidates = [
+        regular_font,
         "DejaVuSans.ttf",
         "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
     ]
@@ -179,7 +192,7 @@ def make_splash(logo_path, os_name, tagline, out_path):
         max_name_w = 850
         max_name_h = 90 if has_tagline else 120
         start_sz = 72 if has_tagline else 80
-        name_font = fit_text_font(bold_font_candidates, name_text, max_name_w, max_name_h, start_size=start_sz, min_size=16)
+        name_font = fit_text_font(bold_font_candidates, name_text, max_name_w, max_name_h, start_size=max(16, min(160, int(name_font_size))), min_size=16)
 
         n_bbox = draw.textbbox((0, 0), name_text, font=name_font)
         nw = n_bbox[2] - n_bbox[0]
@@ -192,7 +205,7 @@ def make_splash(logo_path, os_name, tagline, out_path):
 
         name_x = (CANVAS_SIZE - nw) // 2 - n_bbox[0]
         name_y_draw = name_y - n_bbox[1]
-        draw.text((name_x, name_y_draw), name_text, font=name_font, fill=(255, 255, 255, 255))
+        draw.text((name_x, name_y_draw), name_text, font=name_font, fill=(*name_color, 255))
         last_bottom = name_y + nh
     else:
         last_bottom = upper_h + 30
@@ -201,7 +214,7 @@ def make_splash(logo_path, os_name, tagline, out_path):
         tagline_text = tagline.strip()
         max_tag_w = 880
         max_tag_h = 50
-        tag_font = fit_text_font(reg_font_candidates, tagline_text, max_tag_w, max_tag_h, start_size=32, min_size=12)
+        tag_font = fit_text_font(reg_font_candidates, tagline_text, max_tag_w, max_tag_h, start_size=max(12, min(100, int(tagline_font_size))), min_size=12)
 
         t_bbox = draw.textbbox((0, 0), tagline_text, font=tag_font)
         tw = t_bbox[2] - t_bbox[0]
@@ -210,7 +223,7 @@ def make_splash(logo_path, os_name, tagline, out_path):
         tag_y = last_bottom + 22
         tag_x = (CANVAS_SIZE - tw) // 2 - t_bbox[0]
         tag_y_draw = tag_y - t_bbox[1]
-        draw.text((tag_x, tag_y_draw), tagline_text, font=tag_font, fill=(220, 225, 240, 230))
+        draw.text((tag_x, tag_y_draw), tagline_text, font=tag_font, fill=(*tagline_color, 230))
 
     out_file = Path(out_path)
     out_file.parent.mkdir(parents=True, exist_ok=True)
@@ -227,6 +240,15 @@ def main():
     parser.add_argument("--logo", default=str(default_logo), help=f"Path to logo image (default: {default_logo})")
     parser.add_argument("--name", default="KatoyOS", help="OS name text to render in bold (default: KatoyOS)")
     parser.add_argument("--tagline", default="", help="Optional tagline text to render under name")
+    parser.add_argument("--background", type=parse_color, default=NAVY_BG, help="Background #RRGGBB")
+    parser.add_argument("--logo-width", type=int, default=700, help="Maximum logo width in pixels")
+    parser.add_argument("--logo-y-offset", type=int, default=32, help="Logo vertical offset in pixels")
+    parser.add_argument("--name-font-size", type=int, default=72, help="OS name font size")
+    parser.add_argument("--tagline-font-size", type=int, default=32, help="Tagline font size")
+    parser.add_argument("--name-color", type=parse_color, default=(255, 255, 255), help="OS name color #RRGGBB")
+    parser.add_argument("--tagline-color", type=parse_color, default=(220, 225, 240), help="Tagline color #RRGGBB")
+    parser.add_argument("--regular-font", default="DejaVuSans.ttf", help="Regular font file name or path")
+    parser.add_argument("--bold-font", default="DejaVuSans-Bold.ttf", help="Bold font file name or path")
     parser.add_argument("--out", default=str(default_out), help=f"Path to output PNG (default: {default_out})")
 
     args = parser.parse_args()
@@ -236,7 +258,7 @@ def main():
         print(f"Error: logo image not found at {logo_path}", file=sys.stderr)
         sys.exit(1)
 
-    make_splash(logo_path, args.name, args.tagline, args.out)
+    make_splash(logo_path, args.name, args.tagline, args.out, args.background, args.logo_width, args.logo_y_offset, args.name_font_size, args.tagline_font_size, args.name_color, args.tagline_color, args.regular_font, args.bold_font)
 
 
 if __name__ == "__main__":

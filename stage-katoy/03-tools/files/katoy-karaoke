@@ -3851,7 +3851,8 @@ class KaraokeApp(QWidget):
                 self.stack.raise_()
                 # mpv creates/maps its child window asynchronously; raise the
                 # Qt overlay once more after that child exists.
-                QTimer.singleShot(250, self.stack.raise_)
+                if isinstance(self, QWidget):
+                    QTimer.singleShot(250, self.stack.raise_)
             return True
         except Exception as e:
             if not self._mpv_warned:

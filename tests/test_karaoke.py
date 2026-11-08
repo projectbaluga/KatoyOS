@@ -358,6 +358,10 @@ def test_stop_playback_refreshes_background_after_clearing_play_state():
         is_paused = False
         current_song = ("1", "Song", "Artist", "/song.mid", "")
         controls_card = None
+        controls_timer = Timer("controls")
+        class Stack:
+            def currentWidget(self): return None
+        stack = Stack()
         def hide_score(self): pass
         def update_background_image(self): events.append(("background_refresh", self.is_playing))
         def stop_background_video(self): events.append("video_stop")

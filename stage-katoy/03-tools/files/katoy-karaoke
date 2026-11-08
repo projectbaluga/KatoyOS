@@ -1723,7 +1723,8 @@ def extract_midi_lyrics_and_duration(filepath):
 
     total_duration = tick_to_sec(max_ticks)
 
-    raw_syllables = []
+    lyric_events = []
+    text_fallback_events = []
     meta_title = ""
     meta_artist = ""
 
@@ -1731,48 +1732,65 @@ def extract_midi_lyrics_and_duration(filepath):
         abs_tick = 0
         for msg in track:
             abs_tick += msg.time
-            if msg.type in ('lyrics', 'text'):
-                txt = msg.text
-                if not txt:
-                    continue
-                if txt.startswith('@T'):
-                    t_val = txt[2:].strip()
-                    if not meta_title:
-                        meta_title = t_val
-                    elif not meta_artist:
-                        meta_artist = t_val
-                elif txt.startswith('@'):
-                    continue
-                else:
-                    sec = tick_to_sec(abs_tick)
-                    raw_syllables.append((sec, txt))
+            if msg.type not in ('lyrics', 'text'):
+                continue
+            txt = (msg.text or "").strip("\\x00")
+            if not txt:
+                continue
+            if txt.startswith('@T'):
+                t_val = txt[2:].strip()
+                if not meta_title:
+                    meta_title = t_val
+                elif not meta_artist:
+                    meta_artist = t_val
+                continue
+            if txt.startswith('@'):
+                continue
 
+            event = (tick_to_sec(abs_tick), txt)
+            if msg.type == 'lyrics':
+                lyric_events.append(event)
+            else:
+                # Generic MIDI text often contains labels such as "any",
+                # copyright, or track annotations. Use it only when the file
+                # has no actual lyric meta events at all.
+                text_fallback_events.append(event)
+
+    raw_syllables = lyric_events if lyric_events else text_fallback_events
     raw_syllables.sort(key=lambda x: x[0])
 
     lines = []
     cur_syls = []
 
-    for sec, txt in raw_syllables:
-        is_break = False
-        clean_txt = txt
-        if txt.startswith('/') or txt.startswith('\\'):
-            is_break = True
-            clean_txt = txt[1:]
-        elif '\n' in txt or '\r' in txt:
-            is_break = True
-            clean_txt = txt.replace('\n', '').replace('\r', '')
-
-        if is_break and cur_syls:
-            line_str = "".join(s['text'] for s in cur_syls)
-            lines.append({'text': line_str, 'syllables': cur_syls, 'start_sec': cur_syls[0]['sec']})
+    def flush_line():
+        nonlocal cur_syls
+        if cur_syls:
+            line_str = "".join(item['text'] for item in cur_syls).strip()
+            if line_str:
+                lines.append({
+                    'text': line_str,
+                    'syllables': cur_syls,
+                    'start_sec': cur_syls[0]['sec'],
+                })
             cur_syls = []
 
-        if clean_txt:
-            cur_syls.append({'sec': sec, 'text': clean_txt})
+    # KAR/MIDI karaoke files use slash, backslash, or newline markers for
+    # line breaks. A marker may be a separate event OR attached to either
+    # end of a lyric event; handle both forms so lines don't collapse into
+    # one long first line.
+    import re
+    for sec, txt in raw_syllables:
+        parts = re.split(r'([/\\\\\\r\\n]+)', txt)
+        for part in parts:
+            if not part:
+                continue
+            if all(ch in '/\\\\\\r\\n' for ch in part):
+                flush_line()
+                continue
+            if part.strip():
+                cur_syls.append({'sec': sec, 'text': part})
 
-    if cur_syls:
-        line_str = "".join(s['text'] for s in cur_syls)
-        lines.append({'text': line_str, 'syllables': cur_syls, 'start_sec': cur_syls[0]['sec']})
+    flush_line()
 
     return lines, total_duration, meta_title, meta_artist
 

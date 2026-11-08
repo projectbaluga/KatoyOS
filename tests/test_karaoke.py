@@ -359,6 +359,8 @@ def test_stop_playback_refreshes_background_after_clearing_play_state():
         current_song = ("1", "Song", "Artist", "/song.mid", "")
         controls_card = None
         controls_timer = Timer("controls")
+        player_page = object()
+        library_page = object()
         class Stack:
             def currentWidget(self): return None
         stack = Stack()
@@ -389,6 +391,8 @@ def test_song_transition_does_not_restart_idle_background():
         current_song = None
         controls_card = None
         controls_timer = Timer()
+        player_page = object()
+        library_page = object()
         class Stack:
             def currentWidget(self): return None
         stack = Stack()

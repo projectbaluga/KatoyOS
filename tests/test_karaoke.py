@@ -56,6 +56,29 @@ def test_lyrics_and_encoding_robustness():
         shutil.rmtree(tmpdir)
 
 
+def test_midi_vocal_gender_metadata_and_fallback():
+    tmpdir = Path(tempfile.mkdtemp())
+    try:
+        mid = mido.MidiFile(type=1)
+        track = mido.MidiTrack()
+        mid.tracks.append(track)
+        track.append(mido.MetaMessage("text", text="@GENDER=FEMALE", time=0))
+        midi_path = tmpdir / "female.mid"
+        mid.save(midi_path)
+
+        detect = kk["extract_midi_vocal_gender"]
+        assert detect(midi_path) == "FEMALE"
+
+        mid2 = mido.MidiFile(type=1)
+        mid2.tracks.append(mido.MidiTrack())
+        male_path = tmpdir / "untagged.mid"
+        mid2.save(male_path)
+        assert detect(male_path, "MALE") == "MALE"
+        assert detect(male_path, "FEMALE") == "FEMALE"
+    finally:
+        shutil.rmtree(tmpdir)
+
+
 def test_pitch_transpose_preserves_drum_channel():
     tmpdir = Path(tempfile.mkdtemp())
     try:

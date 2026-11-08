@@ -114,6 +114,9 @@ def test_lyric_renderer_uses_rolling_two_line_window():
             line = self.lyrics_lines[idx]
             return [(line["text"], line["start_sec"], line["start_sec"] + 1.0)]
 
+        def _fit_lyric_pair_font(self):
+            pass
+
     fake = FakeLyricApp()
 
     # First line is active on row 1; second line waits on row 2.

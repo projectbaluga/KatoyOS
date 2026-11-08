@@ -3507,9 +3507,6 @@ class KaraokeApp(QWidget):
 
 
     def start_playback(self, code, title, artist, filepath, singer=""):
-        # Stop the idle video without briefly restarting it during song changes.
-        self.stop_playback(resume_background=False)
-
         if not self.soundfont:
             self.toast.flash("No SoundFont (.sf2) found. Put one on your USB drive.", 6000)
             return
@@ -3518,6 +3515,10 @@ class KaraokeApp(QWidget):
         if not fp.exists():
             self.toast.flash(f"Song file missing: {fp.name}", 5000)
             return
+
+        # Validate the request before stopping the current song/background.
+        # Then stop the idle video without briefly restarting it.
+        self.stop_playback(resume_background=False)
 
         self.current_song = (code, title, artist, filepath, singer)
         self.p_code_lbl.setText(code)

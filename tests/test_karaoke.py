@@ -56,6 +56,62 @@ def test_lyrics_and_encoding_robustness():
         shutil.rmtree(tmpdir)
 
 
+def test_lyrics_prefer_lyric_events_and_split_attached_line_markers(tmp_path):
+    mid = mido.MidiFile(type=1, ticks_per_beat=480)
+    track = mido.MidiTrack()
+    mid.tracks.append(track)
+    # Generic text metadata must not be mistaken for the first sung word.
+    track.append(mido.MetaMessage("text", text="any", time=0))
+    track.append(mido.MetaMessage("lyrics", text="First ", time=0))
+    track.append(mido.MetaMessage("lyrics", text="line/", time=480))
+    track.append(mido.MetaMessage("lyrics", text="Second ", time=480))
+    track.append(mido.MetaMessage("lyrics", text="line/", time=480))
+    path = tmp_path / "two_lines.mid"
+    mid.save(path)
+
+    lines, _, _, _ = kk["extract_midi_lyrics_and_duration"](path)
+    assert [line["text"] for line in lines] == ["First line", "Second line"]
+    assert lines[0]["start_sec"] == 0
+    assert lines[1]["start_sec"] == 1.0
+
+
+def test_lyric_renderer_advances_to_second_line():
+    app_class = kk["KaraokeApp"]
+
+    class MockLabel:
+        def __init__(self):
+            self.text = ""
+            self.syllables = []
+        def set_text(self, value):
+            self.text = value
+        def set_syllables(self, value):
+            self.syllables = value
+        def set_elapsed(self, value):
+            pass
+
+    class FakeLyricApp:
+        def __init__(self):
+            self.lyrics_lines = [
+                {"text": "First line", "start_sec": 0.0,
+                 "syllables": [{"text": "First line", "sec": 0.0}]},
+                {"text": "Second line", "start_sec": 5.0,
+                 "syllables": [{"text": "Second line", "sec": 5.0}]},
+            ]
+            self._lyric_idx = -2
+            self.lyric_curr_lbl = MockLabel()
+            self.lyric_next_lbl = MockLabel()
+            self.lyric_prev_lbl = MockLabel()
+
+    fake = FakeLyricApp()
+    app_class.render_lyrics(fake, 0.2)
+    assert fake._lyric_idx == 0
+    assert fake.lyric_curr_lbl.syllables[0][0] == "First line"
+
+    app_class.render_lyrics(fake, 5.2)
+    assert fake._lyric_idx == 1
+    assert fake.lyric_curr_lbl.syllables[0][0] == "Second line"
+
+
 def test_midi_vocal_gender_metadata_and_fallback():
     tmpdir = Path(tempfile.mkdtemp())
     try:

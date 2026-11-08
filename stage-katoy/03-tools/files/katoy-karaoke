@@ -2325,6 +2325,14 @@ class LyricLineWidget(QWidget):
         self._dirty = True
         self.update()
 
+    def set_mode(self, mode):
+        """Switch a row between active/completed wipe rendering and dim preview."""
+        if mode not in ("current", "dim") or self.mode == mode:
+            return
+        self.mode = mode
+        self._dirty = True
+        self.update()
+
     def set_sung_color(self, color):
         """Set the singer-specific color used for the sung portion of this line."""
         self._sung_color = QColor(color)
@@ -3167,13 +3175,16 @@ class KaraokeApp(QWidget):
         lv.setContentsMargins(0, 0, 0, 0)
         lv.setSpacing(S(6))
         lv.setAlignment(Qt.AlignmentFlag.AlignVCenter)
+        # Both lyric rows use the exact same font size and fixed height.
+        # Their roles (active, completed, upcoming) change as the song progresses.
         self.lyric_curr_lbl = LyricLineWidget(84, "current")
-        self.lyric_next_lbl = LyricLineWidget(64, "dim")
+        self.lyric_next_lbl = LyricLineWidget(84, "dim")
         lv.addStretch(1)
         lv.addWidget(self.lyric_curr_lbl)
         lv.addSpacing(S(12))
         lv.addWidget(self.lyric_next_lbl)
         lv.addStretch(1)
+        self._lyric_layout = None
 
         score_page = QWidget()
         sv = QVBoxLayout(score_page)
@@ -3834,12 +3845,43 @@ class KaraokeApp(QWidget):
             segs.append((syl['text'], start, max(end, start + 0.05)))
         return segs or [(line['text'], line['start_sec'], line['start_sec'] + 1.5)]
 
+    def _lyric_rollover_time(self, idx):
+        """Time to preview the line after the active line, shortly before it ends."""
+        line = self.lyrics_lines[idx]
+        syllables = line.get('syllables', [])
+        if syllables:
+            line_end = syllables[-1]['sec'] + 1.0
+        else:
+            line_end = line['start_sec'] + 2.0
+        line_duration = max(0.5, line_end - line['start_sec'])
+        lead_time = min(1.5, max(0.35, line_duration * 0.18))
+        return max(line['start_sec'], line_end - lead_time)
+
+    def _set_lyric_row(self, widget, idx, elapsed_sec, active=False, completed=False):
+        if idx is None or idx < 0 or idx >= len(self.lyrics_lines):
+            widget.set_mode("dim")
+            widget.set_text("")
+            return
+        if active or completed:
+            widget.set_mode("current")
+            widget.set_syllables(self._segments_for_line(idx))
+            widget.set_elapsed(elapsed_sec if active else 1e9)
+        else:
+            widget.set_mode("dim")
+            widget.set_text(self.lyrics_lines[idx]['text'])
+
     def render_lyrics(self, elapsed_sec):
+        """Render a rolling two-line window without advancing both rows together.
+
+        Line 1 is active while line 2 waits below it. Once line 1 ends, line 1
+        stays visible as completed while line 2 becomes active. Near the end of
+        line 2, the upcoming line is previewed in row 1; row 2 keeps highlighting
+        line 2. When the next line actually starts, it becomes active in row 1.
+        """
         if not self.lyrics_lines:
             if self._lyric_idx != -3:
                 self._lyric_idx = -3
-                if hasattr(self, "lyric_prev_lbl") and self.lyric_prev_lbl:
-                    self.lyric_prev_lbl.set_text("")
+                self._lyric_layout = None
                 self.lyric_curr_lbl.set_text("♪   Instrumental   ♪")
                 self.lyric_next_lbl.set_text("")
             return
@@ -3852,37 +3894,41 @@ class KaraokeApp(QWidget):
                 break
 
         n = len(self.lyrics_lines)
-        if curr_idx == -1:
-            if hasattr(self, "lyric_prev_lbl") and self.lyric_prev_lbl:
-                self.lyric_prev_lbl.set_text("")
-            first_start = self.lyrics_lines[0]['start_sec']
-            gap = first_start - elapsed_sec
-            if gap >= 4.0:
-                self.lyric_curr_lbl.set_text(f"♪   Instrumental ({int(round(gap))}s)   ♪")
-            elif self._lyric_idx != -1:
-                self.lyric_curr_lbl.set_text("♪   ♪   ♪")
-            self.lyric_next_lbl.set_text(self.lyrics_lines[0]['text'])
-            self._lyric_idx = curr_idx
+        if curr_idx < 0:
+            # Before the first vocal entry, show the first two lines as previews.
+            top_idx, bottom_idx, active_slot = 0, (1 if n > 1 else None), None
+        elif curr_idx == 0:
+            top_idx, bottom_idx, active_slot = 0, (1 if n > 1 else None), "top"
+        elif elapsed_sec < self._lyric_rollover_time(curr_idx):
+            # Keep the completed previous line above the line currently being sung.
+            top_idx, bottom_idx, active_slot = curr_idx - 1, curr_idx, "bottom"
         else:
-            curr_line = self.lyrics_lines[curr_idx]
-            syls = curr_line.get('syllables', [])
-            line_end = syls[-1]['sec'] + 1.0 if syls else curr_line['start_sec'] + 2.0
-            next_start = self.lyrics_lines[curr_idx + 1]['start_sec'] if curr_idx + 1 < n else None
+            # Near the end of the current lower line, preview the following line
+            # in the upper row without interrupting the current line's highlighting.
+            top_idx, bottom_idx, active_slot = (curr_idx + 1 if curr_idx + 1 < n else None), curr_idx, "bottom"
 
-            in_gap = (next_start is not None and elapsed_sec >= line_end and (next_start - elapsed_sec) >= 4.0)
-            if in_gap:
-                rem_gap = int(round(next_start - elapsed_sec))
-                self.lyric_curr_lbl.set_text(f"♪   Instrumental ({rem_gap}s)   ♪")
-                self.lyric_next_lbl.set_text(self.lyrics_lines[curr_idx + 1]['text'])
-                self._lyric_idx = -4
-            else:
-                if curr_idx != self._lyric_idx:
-                    self._lyric_idx = curr_idx
-                    if hasattr(self, "lyric_prev_lbl") and self.lyric_prev_lbl:
-                        self.lyric_prev_lbl.set_text(self.lyrics_lines[curr_idx - 1]['text'] if curr_idx > 0 else "")
-                    self.lyric_curr_lbl.set_syllables(self._segments_for_line(curr_idx))
-                    self.lyric_next_lbl.set_text(self.lyrics_lines[curr_idx + 1]['text'] if curr_idx + 1 < n else "")
-                self.lyric_curr_lbl.set_elapsed(elapsed_sec)
+        layout = (top_idx, bottom_idx, active_slot)
+        if layout != getattr(self, "_lyric_layout", None):
+            self._lyric_layout = layout
+            self._set_lyric_row(
+                self.lyric_curr_lbl, top_idx, elapsed_sec,
+                active=(active_slot == "top"),
+                completed=(active_slot == "bottom" and top_idx == curr_idx - 1),
+            )
+            self._set_lyric_row(
+                self.lyric_next_lbl, bottom_idx, elapsed_sec,
+                active=(active_slot == "bottom"),
+            )
+
+        # Update the active wipe every playback tick; completed top rows remain fully sung.
+        if active_slot == "top" and top_idx is not None:
+            self.lyric_curr_lbl.set_elapsed(elapsed_sec)
+        elif active_slot == "bottom" and bottom_idx is not None:
+            self.lyric_next_lbl.set_elapsed(elapsed_sec)
+            if top_idx == curr_idx - 1:
+                self.lyric_curr_lbl.set_elapsed(1e9)
+
+        self._lyric_idx = curr_idx
 
     def _is_video_file(self, path):
         return bool(path and path.suffix.lower() in VIDEO_EXTS)

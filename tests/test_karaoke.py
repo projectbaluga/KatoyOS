@@ -388,6 +388,10 @@ def test_song_transition_does_not_restart_idle_background():
         is_paused = False
         current_song = None
         controls_card = None
+        controls_timer = Timer()
+        class Stack:
+            def currentWidget(self): return None
+        stack = Stack()
         def hide_score(self): pass
         def stop_background_video(self): events.append("video_stop")
         def update_background_image(self): events.append("background_refresh")
